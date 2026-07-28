@@ -1,0 +1,21 @@
+﻿.venv/
+__pycache__/
+*.py[cod]
+.env
+logs/
+.pytest_cache/
+.idea/
+.vscode/
+
+# Local API request payloads
+body.json
+success_task.json
+failed_task.json
+invalid_empty.json
+invalid_missing.json
+
+# Local database and coverage files
+*.db
+*.sqlite3
+.coverage
+htmlcov/
