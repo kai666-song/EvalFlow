@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class TaskStatus(StrEnum):
     """AI任务可能处于的状态"""
@@ -22,6 +22,8 @@ class TaskCreate(BaseModel):
 
 class TaskResponse(BaseModel):
     """服务器返回给客户端的完整任务信息。"""
+
+    model_config = ConfigDict(from_attributes=True)
 
     task_id: str
     prompt: str
