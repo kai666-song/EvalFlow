@@ -5,11 +5,11 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import TaskCreate, TaskResponse, TaskStatus
+from app.models import TaskCreate, TaskListResponse, TaskResponse, TaskStatus
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
@@ -185,6 +185,44 @@ async def create_task(payload: TaskCreate, session: SessionDep) -> TaskResponse:
 
     return TaskResponse.model_validate(task)
 
+
+@app.get("/tasks", response_model=TaskListResponse)
+async def list_tasks(
+    session: SessionDep,
+    task_status: TaskStatus | None=None,
+    limit: int=Query(default=20, ge=1, le=100),
+    offset: int=Query(default=0, ge=0),
+) -> TaskListResponse:
+    """分页查询任务，并支持按状态筛选。"""
+
+    query = select(TaskRecord)
+    count_query = select(func.count()).select_from(TaskRecord)
+
+    if task_status is not None:
+        query = query.where(TaskRecord.status == task_status.value)
+        count_query = count_query.where(TaskRecord.status == task_status.value)
+
+    query = (
+        query
+        .order_by(TaskRecord.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    result = await session.execute(query)
+    records = result.scalars().all()
+
+    total = await session.scalar(count_query)
+
+    return TaskListResponse(
+        items=[
+            TaskResponse.model_validate(record)
+            for record in records
+        ],
+        total=total or 0,
+        limit=limit,
+        offset=offset
+    )
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(task_id: str, session: SessionDep) -> TaskResponse:

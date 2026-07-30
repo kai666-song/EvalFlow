@@ -31,3 +31,11 @@ class TaskResponse(BaseModel):
     result: str | None=None
     error: str | None=None
     created_at: datetime
+
+class TaskListResponse(BaseModel):
+    """任务列表响应。"""
+
+    items: list[TaskResponse]
+    total: int
+    limit: int
+    offset: int
