@@ -1,17 +1,10 @@
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
-from app.main import app
 
-async def test_health_check() -> None:
+async def test_health_check(client: AsyncClient) -> None:
     """健康检查接口应返回200和固定JSON。"""
 
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-    ) as client:
-        response = await client.get("./health")
+    response = await client.get("/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
