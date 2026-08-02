@@ -20,7 +20,7 @@ async def recover_interrupted_tasks() -> int:
     """将服务重启前遗留的处理中任务标记为失败。"""
 
     async with AsyncSessionFactory() as session:
-        statement=(
+        statement = (
             update(TaskRecord)
             .where(
                 TaskRecord.status == TaskStatus.PROCESSING.value
@@ -28,14 +28,14 @@ async def recover_interrupted_tasks() -> int:
             .values(
                 status=TaskStatus.FAILED.value,
                 result=None,
-                error="Task interrupted by service restart"
+                error="Task interrupted by service restart",
             )
         )
 
-    result = await session.execute(statement)
-    await session.commit()
+        result = await session.execute(statement)
+        await session.commit()
 
-    return result.rowcount or 0
+        return result.rowcount or 0
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -238,9 +238,17 @@ async def get_task(task_id: str, session: SessionDep) -> TaskResponse:
 
     return TaskResponse.model_validate(task)
 
-@app.post("/tasks/{task_id}/run", response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)
-async def run_task(task_id: str, background_tasks: BackgroundTasks, session: SessionDep) -> TaskResponse:
-    """将数据库中的任务提交到后台执行。"""
+@app.post(
+    "/tasks/{task_id}/run",
+    response_model=TaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+) -> TaskResponse:
+    """将处于PENDING状态的任务提交到后台执行。"""
 
     task = await session.get(TaskRecord, task_id)
 
@@ -250,10 +258,11 @@ async def run_task(task_id: str, background_tasks: BackgroundTasks, session: Ses
             detail="Task not found",
         )
 
-    if task.status == TaskStatus.PROCESSING.value:
+    # 只有尚未执行的PENDING任务才能提交。
+    if task.status != TaskStatus.PENDING.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Task is already processing",
+            detail=f"Task cannot be run from status {task.status}",
         )
 
     task.status = TaskStatus.PROCESSING.value
@@ -266,9 +275,12 @@ async def run_task(task_id: str, background_tasks: BackgroundTasks, session: Ses
     logger.info(
         "task_submitted task_id=%s status=%s",
         task.task_id,
-        task.status
+        task.status,
     )
 
-    background_tasks.add_task(execute_task, task.task_id)
+    background_tasks.add_task(
+        execute_task,
+        task.task_id,
+    )
 
     return TaskResponse.model_validate(task)
