@@ -40,4 +40,4 @@ class TaskRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-    )
+    )   

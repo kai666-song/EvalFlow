@@ -5,6 +5,8 @@ requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
     "fastapi[standard]>=0.140.0",
+    "openai>=2.52.0",
+    "pydantic-settings>=2.14.2",
     "sqlalchemy>=2.0.51",
 ]
 

@@ -6,6 +6,7 @@ logs/
 .pytest_cache/
 .idea/
 .vscode/
+smoke_result.json
 
 # Local API request payloads
 body.json
