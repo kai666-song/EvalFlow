@@ -29,6 +29,13 @@ async def recover_interrupted_tasks() -> int:
                 status=TaskStatus.FAILED.value,
                 result=None,
                 error="Task interrupted by service restart",
+                model_name=None,
+                llm_duration_ms=None,
+                input_tokens=None,
+                output_tokens=None,
+                reasoning_tokens=None,
+                cached_tokens=None,
+                total_tokens=None,
             )
         )
 
@@ -88,11 +95,19 @@ async def execute_task(task_id: str) -> None:
         )
 
         try:
-            result = await process_prompt(task.prompt)
+            llm_result = await process_prompt(task.prompt)
 
-            task.result = result
+            task.result = llm_result.text
             task.status = TaskStatus.SUCCESS.value
             task.error = None
+
+            task.model_name = llm_result.model
+            task.llm_duration_ms = llm_result.duration_ms
+            task.input_tokens = llm_result.input_tokens
+            task.output_tokens = llm_result.output_tokens
+            task.reasoning_tokens = llm_result.resoning_tokens
+            task.cached_tokens = llm_result.cached_tokens
+            task.total_tokens = llm_result.total_tokens
 
             # 真正将SUCCESS和result写入数据库。
             await session.commit()
@@ -111,6 +126,14 @@ async def execute_task(task_id: str) -> None:
             task.status = TaskStatus.FAILED.value
             task.result = None
             task.error = str(exc)
+
+            task.model_name = None
+            task.llm_duration_ms = None
+            task.input_tokens = None
+            task.reasoning_tokens = None
+            task.output_tokens = None
+            task.cached_tokens = None
+            task.total_tokens = None
 
             await session.commit()
 
@@ -170,6 +193,13 @@ async def create_task(payload: TaskCreate, session: SessionDep) -> TaskResponse:
         status=TaskStatus.PENDING.value,
         result=None,
         error=None,
+        model_name=None,
+        llm_duration_ms=None,
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        cached_tokens=None,
+        total_tokens=None,
         created_at=datetime.now(timezone.utc),
     )
 

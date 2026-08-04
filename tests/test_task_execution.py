@@ -1,12 +1,21 @@
 from httpx import AsyncClient
 
 import app.main as main_module
+from app.llm_models import LLMResult
 
+async def fake_process_prompt(prompt: str) -> LLMResult:
+    """模拟一次成功的大模型调用。"""
 
-async def fake_process_prompt(prompt: str) -> str:
-    """立即返回结果，代替真实的五秒模型处理。"""
-
-    return f"测试结果：{prompt}"
+    return LLMResult(
+        text=f"测试结果：{prompt}",
+        model="test-model",
+        duration_ms=10.0,
+        input_tokens=5,
+        output_tokens=8,
+        resoning_tokens=0,
+        cached_tokens=0,
+        total_tokens=13,
+    )
 
 
 async def test_run_task_successfully(
@@ -49,6 +58,14 @@ async def test_run_task_successfully(
     assert task["status"] == "SUCCESS"
     assert task["result"] == "测试结果：测试后台任务"
     assert task["error"] is None
+
+    assert task["model_name"] == "test-model"
+    assert task["llm_duration_ms"] == 10.0
+    assert task["input_tokens"] == 5
+    assert task["output_tokens"] == 8
+    assert task["reasoning_tokens"] == 0
+    assert task["cached_tokens"] == 0
+    assert task["total_tokens"] == 13
 
 
 async def fake_failed_process_prompt(prompt: str) -> str:
@@ -96,6 +113,14 @@ async def test_run_task_failure(
     assert task["status"] == "FAILED"
     assert task["result"] is None
     assert task["error"] == "模拟测试失败"
+
+    assert task["model_name"] is None
+    assert task["llm_duration_ms"] is None
+    assert task["input_tokens"] is None
+    assert task["output_tokens"] is None
+    assert task["reasoning_tokens"] is None
+    assert task["cached_tokens"] is None
+    assert task["total_tokens"] is None
 
 
 async def test_run_nonexistent_task_returns_404(

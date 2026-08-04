@@ -28,6 +28,15 @@ class TaskResponse(BaseModel):
     task_id: str
     prompt: str
     status: TaskStatus
+    model_name: str | None=None
+    llm_duration_ms: float | None=None
+
+    input_tokens: int | None=None
+    output_tokens: int | None=None
+    reasoning_tokens: int | None=None
+    cached_tokens: int | None=None
+    total_tokens: int | None=None
+    
     result: str | None=None
     error: str | None=None
     created_at: datetime
