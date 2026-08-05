@@ -1,8 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class LLMResult(BaseModel):
     """一次大模型调用的文本结果和运行指标。"""
-
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    
     text: str
 
     model: str
@@ -21,7 +24,7 @@ class LLMResult(BaseModel):
         ge=0,
     )
 
-    resoning_tokens: int = Field(
+    reasoning_tokens: int = Field(
         default=0,
         ge=0,
     )

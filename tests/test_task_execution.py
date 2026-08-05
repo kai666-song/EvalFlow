@@ -3,16 +3,18 @@ from httpx import AsyncClient
 import app.main as main_module
 from app.llm_models import LLMResult
 
-async def fake_process_prompt(prompt: str) -> LLMResult:
+async def fake_process_prompt(prompt: str, model: str | None=None) -> LLMResult:
     """模拟一次成功的大模型调用。"""
+
+    returned_model = model or "test-dafault-model"
 
     return LLMResult(
         text=f"测试结果：{prompt}",
-        model="test-model",
+        model=returned_model,
         duration_ms=10.0,
         input_tokens=5,
         output_tokens=8,
-        resoning_tokens=0,
+        reasoning_tokens=0,
         cached_tokens=0,
         total_tokens=13,
     )
@@ -34,6 +36,7 @@ async def test_run_task_successfully(
         "/tasks",
         json={
             "prompt": "测试后台任务",
+            "model": "glm-5.2",
         },
     )
 
@@ -59,7 +62,8 @@ async def test_run_task_successfully(
     assert task["result"] == "测试结果：测试后台任务"
     assert task["error"] is None
 
-    assert task["model_name"] == "test-model"
+    assert task["requested_model"] == "glm-5.2"
+    assert task["model_name"] == "glm-5.2"
     assert task["llm_duration_ms"] == 10.0
     assert task["input_tokens"] == 5
     assert task["output_tokens"] == 8
@@ -68,7 +72,7 @@ async def test_run_task_successfully(
     assert task["total_tokens"] == 13
 
 
-async def fake_failed_process_prompt(prompt: str) -> str:
+async def fake_failed_process_prompt(prompt: str, model: str | None=None) -> str:
     """模拟模型处理过程中发生异常。"""
 
     raise ValueError("模拟测试失败")

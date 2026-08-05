@@ -35,3 +35,23 @@ async def test_list_tasks_with_invalid_limit_returns_422(
 
     assert detail[0]["loc"] == ["query", "limit"]
     assert detail[0]["type"] == "greater_than_equal"
+
+async def test_create_task_with_unsupported_model_returns_422(
+        client: AsyncClient,
+) -> None:
+    """不在白名单的模型应被参数校验拒绝。"""
+
+    response = await client.post(
+        "/tasks",
+        json={
+            "prompt": "测试非法模型",
+            "model": "unknown-model",
+        },
+    )
+
+    assert response.status_code == 422
+
+    detail = response.json()["detail"]
+
+    assert detail[0]["loc"] == ["body", "model"]
+    assert detail[0]["type"] == "enum"

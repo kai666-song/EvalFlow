@@ -9,7 +9,7 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import TaskCreate, TaskListResponse, TaskResponse, TaskStatus
+from app.models import SupportedModel, TaskCreate, TaskListResponse, TaskResponse, TaskStatus
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
@@ -95,7 +95,7 @@ async def execute_task(task_id: str) -> None:
         )
 
         try:
-            llm_result = await process_prompt(task.prompt)
+            llm_result = await process_prompt(task.prompt, model=task.requested_model)
 
             task.result = llm_result.text
             task.status = TaskStatus.SUCCESS.value
@@ -105,7 +105,7 @@ async def execute_task(task_id: str) -> None:
             task.llm_duration_ms = llm_result.duration_ms
             task.input_tokens = llm_result.input_tokens
             task.output_tokens = llm_result.output_tokens
-            task.reasoning_tokens = llm_result.resoning_tokens
+            task.reasoning_tokens = llm_result.reasoning_tokens
             task.cached_tokens = llm_result.cached_tokens
             task.total_tokens = llm_result.total_tokens
 
@@ -193,6 +193,7 @@ async def create_task(payload: TaskCreate, session: SessionDep) -> TaskResponse:
         status=TaskStatus.PENDING.value,
         result=None,
         error=None,
+        requested_model=payload.model.value,
         model_name=None,
         llm_duration_ms=None,
         input_tokens=None,

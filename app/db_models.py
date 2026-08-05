@@ -27,6 +27,11 @@ class TaskRecord(Base):
         default=TaskStatus.PENDING.value,
     )
 
+    requested_model: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
     model_name: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,

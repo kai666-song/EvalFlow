@@ -38,6 +38,7 @@ async def test_create_task_returns_pending_task(
     assert data["result"] is None
     assert data["error"] is None
     assert data["created_at"]
+    assert data["requested_model"] == "qwen3.7-flash"
 
 
 async def test_get_created_task(
@@ -237,3 +238,24 @@ async def test_list_tasks_filters_by_status(
 
     assert success_data["total"] == 0
     assert success_data["items"] == []
+
+async def test_create_task_with_selected_model(
+        client: AsyncClient,
+) -> None:
+    """创建任务时应支持白名单中的模型。"""
+
+    response = await client.post(
+        "/tasks",
+        json={
+            "prompt": "比较模型响应",
+            "model": "glm-5.2",
+        },
+    )
+
+    assert response.status_code == 201
+
+    task = response.json()
+
+    assert task["requested_model"] == "glm-5.2"
+    assert task["model_name"] is None
+    assert task["status"] == "PENDING"
