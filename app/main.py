@@ -9,11 +9,36 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import SupportedModel, TaskCreate, TaskListResponse, TaskResponse, TaskStatus
+from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
 from app.db_models import TaskRecord
+
+
+def _build_task_record(
+    *,
+    prompt: str,
+    requested_model: str,
+) -> TaskRecord:
+    """构造一条尚未执行的模型任务记录。"""
+
+    return TaskRecord(
+        task_id=str(uuid4()),
+        prompt=prompt,
+        status=TaskStatus.PENDING.value,
+        requested_model=requested_model,
+        model_name=None,
+        llm_duration_ms=None,
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        cached_tokens=None,
+        total_tokens=None,
+        result=None,
+        error=None,
+        created_at=datetime.now(timezone.utc),
+    )
 
 logger = get_logger()
 async def recover_interrupted_tasks() -> int:
@@ -62,7 +87,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await engine.dispose()
-        logger.info("databse_engine_disposed")
+        logger.info("database_engine_disposed")
 
 app = FastAPI(
     title="EvalFlow",
@@ -160,6 +185,14 @@ async def execute_task(task_id: str) -> None:
                 task.result = None
                 task.error = f"Unexpected error: {exc}"
 
+                task.model_name = None
+                task.llm_duration_ms = None
+                task.input_tokens = None
+                task.output_tokens = None
+                task.reasoning_tokens = None
+                task.cached_tokens = None
+                task.total_tokens = None
+
                 await session.commit()
 
             duration_ms = (perf_counter() - start_time) * 1000
@@ -182,26 +215,17 @@ async def health_check() -> dict[str, str]:
 @app.post(
     "/tasks",
     response_model=TaskResponse,
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
 )
-async def create_task(payload: TaskCreate, session: SessionDep) -> TaskResponse:
-    """创建一个新的AI处理任务。"""
+async def create_task(
+    payload: TaskCreate,
+    session: AsyncSession = Depends(get_session),
+) -> TaskResponse:
+    """创建一条待执行的大模型任务。"""
 
-    task = TaskRecord(
-        task_id=str(uuid4()),
+    task = _build_task_record(
         prompt=payload.prompt,
-        status=TaskStatus.PENDING.value,
-        result=None,
-        error=None,
         requested_model=payload.model.value,
-        model_name=None,
-        llm_duration_ms=None,
-        input_tokens=None,
-        output_tokens=None,
-        reasoning_tokens=None,
-        cached_tokens=None,
-        total_tokens=None,
-        created_at=datetime.now(timezone.utc),
     )
 
     session.add(task)
@@ -211,11 +235,45 @@ async def create_task(payload: TaskCreate, session: SessionDep) -> TaskResponse:
     logger.info(
         "task_created task_id=%s status=%s",
         task.task_id,
-        task.status
+        task.status,
     )
 
     return TaskResponse.model_validate(task)
 
+
+@app.post(
+    "/comparisons",
+    response_model=ComparisonResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_comparison(
+    payload: ComparisonCreate,
+    session: AsyncSession = Depends(get_session),
+) -> ComparisonResponse:
+    """为同一个Prompt创建多条模型任务。"""
+
+    tasks = [
+        _build_task_record(
+            prompt=payload.prompt,
+            requested_model=model.value,
+        )
+        for model in payload.models
+    ]
+
+    session.add_all(tasks)
+    await session.commit()
+
+    for task in tasks:
+        await session.refresh(task)
+
+    return ComparisonResponse(
+        prompt=payload.prompt,
+        total=len(tasks),
+        tasks=[
+            TaskResponse.model_validate(task)
+            for task in tasks
+        ],
+    )
 
 @app.get("/tasks", response_model=TaskListResponse)
 async def list_tasks(

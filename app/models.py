@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from enum import StrEnum
 
 
@@ -58,3 +58,38 @@ class TaskListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+class ComparisonCreate(BaseModel):
+    """创建多模型对比任务的请求。"""
+
+    prompt: str = Field(
+        min_length=1,
+        max_length=2000,
+    )
+
+    models: list[SupportedModel] = Field(
+        min_length=2,
+        max_length=5,
+    )
+
+    @field_validator("models")
+    @classmethod
+    def validate_unique_models(
+        cls,
+        models: list[SupportedModel],
+    ) -> list[SupportedModel]:
+        """同一次对比中不允许重复选择模型。"""
+
+        if len(models) != len(set(models)):
+            raise ValueError(
+                "models must not contain duplicates"
+            )
+
+        return models
+
+class ComparisonResponse(BaseModel):
+    """创建多模型对比任务后的响应。"""
+
+    prompt: str
+    total: int = Field(ge=0)
+    tasks: list[TaskResponse]
