@@ -1,8 +1,101 @@
+import app.main as main_module
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db_models import ComparisonRecord, TaskRecord
+
+
+async def test_run_comparison_submits_all_tasks(
+        client: AsyncClient,
+        monkeypatch,
+) -> None:
+    """运行 Comparison 时所有子任务都应进入 PROCESSING 。"""
+
+    executed_task_ids = []
+
+    async def fake_execute_comparison_tasks(
+            task_ids: list[str],
+    ) -> None:
+        executed_task_ids.extend(task_ids)
+
+    monkeypatch.setattr(
+        main_module,
+        "execute_comparison_tasks",
+        fake_execute_comparison_tasks,
+    )
+
+    create_response = await client.post(
+        "/comparisons",
+        json={
+            "prompt": "测试并发模型执行",
+            "models": ["qwen3.7-flash", "glm-5.2"],
+        },
+    )
+
+    comparison_id = create_response.json()["comparison_id"]
+
+    response = await client.post(
+        f"/comparisons/{comparison_id}/run"
+    )
+
+    assert response.status_code == 202
+
+    data = response.json()
+
+    assert data["comparison_id"] == comparison_id
+    assert data["total"] == 2
+    assert all(task["status"] == "PROCESSING" for task in data["tasks"])
+    assert len(executed_task_ids) == 2
+
+
+async def test_run_comparison_returns_404_when_not_found(
+        client: AsyncClient,
+) -> None:
+    response = await client.post(
+        "/comparisons/999999/run"
+    )
+
+    assert response.status_code == 404
+
+
+async def test_run_comparison_rejects_second_submission(
+        client: AsyncClient,
+        monkeypatch,
+) -> None:
+    async def fake_execute_comparison_tasks(
+            task_ids: list[str],
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        main_module,
+        "execute_comparison_tasks",
+        fake_execute_comparison_tasks,
+    )
+
+    create_response = await client.post(
+        "/comparisons",
+        json={
+            "prompt": "测试重复执行",
+            "models": ["qwen3.7-flash", "glm-5.2"],
+        },
+    )
+
+    comparison_id = create_response.json()["comparison_id"]
+
+    first_response = await client.post(
+        f"/comparisons/{comparison_id}/run"
+    )
+
+    assert first_response.status_code == 202
+    second_response = await client.post(
+        f"/comparisons/{comparison_id}/run"
+    )
+
+    assert second_response.status_code == 409
+
 
 async def test_create_comparison_creates_tasks_for_each_model(
         client: AsyncClient,

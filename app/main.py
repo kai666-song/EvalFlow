@@ -1,3 +1,5 @@
+import asyncio
+
 from datetime import datetime, timezone
 from uuid import uuid4
 from time import perf_counter
@@ -206,7 +208,13 @@ async def execute_task(task_id: str) -> None:
                 type(exc).__name__,
                 duration_ms,
             )
-    
+
+async def execute_comparison_tasks(task_ids: list[str]) -> None:
+    """并发执行一次模型对比中的所有子任务。"""
+
+    await asyncio.gather(
+        *(execute_task(task_id) for task_id in task_ids)
+    )    
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
@@ -317,6 +325,66 @@ async def get_comparison(
         total=len(tasks),
         tasks=[TaskResponse.model_validate(task) for task in tasks],
     )
+
+@app.post(
+        "/comparisons/{comparison_id}/run",
+        response_model=ComparisonResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_comparison(
+    comparison_id: int,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+) -> ComparisonResponse:
+    """提交一次模型对比中的全部任务。"""
+
+    comparison = await session.get(
+        ComparisonRecord,
+        comparison_id,
+    )
+
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comparison not found",
+        )
+
+    result = await session.execute(
+        select(TaskRecord).where(TaskRecord.comparison_id == comparison_id).order_by(TaskRecord.created_at.asc())
+    )
+
+    tasks = result.scalars().all()
+
+    if not tasks:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Comparison has no tasks",
+        )
+
+    if any(task.status != TaskStatus.PENDING.value for task in tasks):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Comparison cannot be run",
+        )
+
+    for task in tasks:
+        task.status = TaskStatus.PROCESSING.value
+        task.result = None
+        task.error = None
+
+    await session.commit()
+
+    task_ids = [task.task_id for task in tasks]
+
+    background_tasks.add_task(execute_comparison_tasks, task_ids)
+
+    return ComparisonResponse(
+        comparison_id=comparison.id,
+        prompt=comparison.prompt,
+        total=len(tasks),
+        tasks = [TaskResponse.model_validate(task) for task in tasks],
+    )
+
 
 @app.get("/tasks", response_model=TaskListResponse)
 async def list_tasks(
