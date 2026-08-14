@@ -13,13 +13,14 @@ from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskLis
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
-from app.db_models import TaskRecord
+from app.db_models import ComparisonRecord, TaskRecord
 
 
 def _build_task_record(
     *,
     prompt: str,
     requested_model: str,
+    comparison_id: int | None=None,
 ) -> TaskRecord:
     """构造一条尚未执行的模型任务记录。"""
 
@@ -28,6 +29,7 @@ def _build_task_record(
         prompt=prompt,
         status=TaskStatus.PENDING.value,
         requested_model=requested_model,
+        comparison_id=comparison_id,
         model_name=None,
         llm_duration_ms=None,
         input_tokens=None,
@@ -252,27 +254,68 @@ async def create_comparison(
 ) -> ComparisonResponse:
     """为同一个Prompt创建多条模型任务。"""
 
+    comparison = ComparisonRecord(prompt=payload.prompt)    
+    session.add(comparison)
+    await session.flush()
+
     tasks = [
         _build_task_record(
             prompt=payload.prompt,
             requested_model=model.value,
+            comparison_id=comparison.id,
         )
         for model in payload.models
     ]
 
     session.add_all(tasks)
     await session.commit()
+    await session.refresh(comparison)
 
     for task in tasks:
         await session.refresh(task)
 
     return ComparisonResponse(
+        comparison_id=comparison.id,
         prompt=payload.prompt,
         total=len(tasks),
         tasks=[
             TaskResponse.model_validate(task)
             for task in tasks
         ],
+    )
+
+@app.get(
+        "/comparisons/{comparison_id}",
+        response_model=ComparisonResponse,
+) 
+async def get_comparison(
+    comparison_id: int,
+    session: SessionDep,
+) -> ComparisonResponse:
+    """查询一次模型对比及其全部子任务。"""
+
+    comparison = await session.get(
+        ComparisonRecord,
+        comparison_id,
+    )
+
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comparison not found",
+        )
+
+    result = await session.execute(
+        select(TaskRecord).where(TaskRecord.comparison_id == comparison_id).order_by(TaskRecord.created_at.asc())
+    )
+
+    tasks = result.scalars().all()
+
+    return ComparisonResponse(
+        comparison_id=comparison.id,
+        prompt=comparison.prompt,
+        total=len(tasks),
+        tasks=[TaskResponse.model_validate(task) for task in tasks],
     )
 
 @app.get("/tasks", response_model=TaskListResponse)

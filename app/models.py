@@ -90,6 +90,7 @@ class ComparisonCreate(BaseModel):
 class ComparisonResponse(BaseModel):
     """创建多模型对比任务后的响应。"""
 
+    comparison_id: int
     prompt: str
     total: int = Field(ge=0)
     tasks: list[TaskResponse]

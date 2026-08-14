@@ -67,3 +67,12 @@ async def client(
 
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+
+@pytest_asyncio.fixture
+async def db_session(
+    client: AsyncClient,
+) -> AsyncIterator[AsyncSession]:
+    """提供用于断言数据库状态的测试会话。"""
+
+    async with TestSessionFactory() as session:
+        yield session

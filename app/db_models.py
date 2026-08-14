@@ -1,10 +1,20 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 from app.models import TaskStatus
+
+
+class ComparisonRecord(Base):
+    """数据库中的多模型比较记录。"""
+    
+    __tablename__ = "comparisons"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
 
 class TaskRecord(Base):
     """数据库中的AI任务记录。"""
@@ -81,3 +91,10 @@ class TaskRecord(Base):
         DateTime(timezone=True),
         nullable=False,
     )   
+
+    comparison_id: Mapped[int | None] = mapped_column(
+        ForeignKey("comparisons.id"),
+        nullable=True,
+        index=True,
+    )
+
