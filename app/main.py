@@ -11,11 +11,11 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus
+from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
-from app.db_models import ComparisonRecord, TaskRecord
+from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord 
 
 
 def _build_task_record(
@@ -249,6 +249,24 @@ async def create_task(
     )
 
     return TaskResponse.model_validate(task)
+
+
+@app.post(
+        "/datasets",
+        response_model=EvaluationDatasetResponse,
+        status_code=status.HTTP_201_CREATED,
+)
+async def create_dataset(payload: EvaluationDatasetCreate, session: SessionDep) -> EvaluationDatasetResponse:
+    """创建一份评测数据集。"""
+
+    dataset = EvaluationDatasetRecord(name=payload.name, description=payload.description, created_at=datetime.now(timezone.utc))
+
+    session.add(dataset)
+
+    await session.commit()
+    await session.refresh(dataset)
+
+    return EvaluationDatasetResponse(dataset_id=dataset.id, name=dataset.name, description=dataset.description, created_at=dataset.created_at)
 
 
 @app.post(

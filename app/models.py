@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from enum import StrEnum
+from pydantic import BaseModel, ConfigDict, Field, field_validator, StringConstraints
+from typing import Annotated
 
 
 class SupportedModel(StrEnum):
@@ -94,3 +94,30 @@ class ComparisonResponse(BaseModel):
     prompt: str
     total: int = Field(ge=0)
     tasks: list[TaskResponse]
+
+
+class EvaluationDatasetCreate(BaseModel):
+    """创建评测数据集时的请求体。"""
+
+    name: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=200,
+        ),
+    ]
+
+    description: Annotated[
+        str,
+        StringConstraints(max_length=2000),
+    ] | None = None
+
+
+class EvaluationDatasetResponse(BaseModel):
+    """评测数据集响应。"""
+
+    dataset_id: int
+    name: str
+    description: str | None
+    created_at: datetime
