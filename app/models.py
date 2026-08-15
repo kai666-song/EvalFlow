@@ -121,3 +121,27 @@ class EvaluationDatasetResponse(BaseModel):
     name: str
     description: str | None
     created_at: datetime
+
+
+class EvaluationCaseCreate(BaseModel):
+    """向评测数据集中新增一条评测样本。"""
+
+    prompt: str = Field(
+        min_length=1,
+        max_length=2000,
+    )
+
+    reference_answer: str | None = Field(
+        default=None,
+        max_length=10000,
+    )
+
+
+class EvaluationCaseResponse(BaseModel):
+    """单条评测样本响应。"""
+
+    case_id: int
+    dataset_id: int
+    prompt: str
+    reference_answer: str | None
+    created_at: datetime

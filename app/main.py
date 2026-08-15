@@ -11,11 +11,11 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse
+from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
-from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord 
+from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord , EvaluationCaseRecord
 
 
 def _build_task_record(
@@ -268,6 +268,49 @@ async def create_dataset(payload: EvaluationDatasetCreate, session: SessionDep) 
 
     return EvaluationDatasetResponse(dataset_id=dataset.id, name=dataset.name, description=dataset.description, created_at=dataset.created_at)
 
+
+@app.post(
+    "/datasets/{dataset_id}/cases",
+    response_model=EvaluationCaseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_evaluation_case(
+    dataset_id: int,
+    payload: EvaluationCaseCreate,
+    session: SessionDep,
+) -> EvaluationCaseResponse:
+    """向指定评测数据集中新增一条评测样本。"""
+
+    dataset = await session.get(
+        EvaluationDatasetRecord,
+        dataset_id,
+    )
+
+    if dataset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found",
+        )
+
+    evaluation_case = EvaluationCaseRecord(
+        dataset_id=dataset_id,
+        prompt=payload.prompt,
+        reference_answer=payload.reference_answer,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    session.add(evaluation_case)
+
+    await session.commit()
+    await session.refresh(evaluation_case)
+
+    return EvaluationCaseResponse(
+        case_id=evaluation_case.id,
+        dataset_id=evaluation_case.dataset_id,
+        prompt=evaluation_case.prompt,
+        reference_answer=evaluation_case.reference_answer,
+        created_at=evaluation_case.created_at,
+    )
 
 @app.post(
     "/comparisons",
