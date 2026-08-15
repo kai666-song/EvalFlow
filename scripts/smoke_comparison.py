@@ -30,7 +30,7 @@ async def main() -> None:
         comparison_id = comparison["comparison_id"]
 
         print(
-            f"comparison_created"
+            f"comparison_created "
             f"comparison_id={comparison_id}"
         )
 

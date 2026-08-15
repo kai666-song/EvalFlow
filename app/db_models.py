@@ -7,6 +7,64 @@ from app.database import Base
 from app.models import TaskStatus
 
 
+class EvaluationDatasetRecord(Base):
+    """数据库中的评测数据集记录。"""
+
+    __tablename__ = "evaluation_datasets"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(200),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+class EvaluationCaseRecord(Base):
+    """评测数据集中的单条评测样本。"""
+
+    __tablename__ = "evaluation_cases"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_datasets.id"),
+        nullable=False,
+        index=True,
+    )
+
+    prompt: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    reference_answer: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    
 class ComparisonRecord(Base):
     """数据库中的多模型比较记录。"""
     
