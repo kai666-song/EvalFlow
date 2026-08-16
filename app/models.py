@@ -145,3 +145,10 @@ class EvaluationCaseResponse(BaseModel):
     prompt: str
     reference_answer: str | None
     created_at: datetime
+
+
+class EvaluationDatasetDetailResponse(EvaluationDatasetResponse):
+    """包含全部评测样本的数据集详情。"""
+
+    total_cases: int = Field(ge=0)
+    cases: list[EvaluationCaseResponse]

@@ -131,3 +131,96 @@ async def test_create_case_rejects_blank_prompt(
     )
 
     assert response.status_code == 422
+
+
+async def test_get_dataset_returns_dataset_with_cases(
+    client: AsyncClient,
+) -> None:
+    """查询 Dataset 时应返回其全部评测样本。"""
+
+    dataset_response = await client.post(
+        "/datasets",
+        json={
+            "name": "rag_eval",
+            "description": "RAG基础评测集",
+        },
+    )
+
+    dataset_id = dataset_response.json()["dataset_id"]
+
+    await client.post(
+        f"/datasets/{dataset_id}/cases",
+        json={
+            "prompt": "什么是RAG？",
+            "reference_answer": "RAG结合检索与生成。",
+        },
+    )
+
+    await client.post(
+        f"/datasets/{dataset_id}/cases",
+        json={
+            "prompt": "RAG为什么能降低幻觉？",
+            "reference_answer": "因为生成过程可以参考外部知识。",
+        },
+    )
+
+    response = await client.get(
+        f"/datasets/{dataset_id}"
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["dataset_id"] == dataset_id
+    assert data["name"] == "rag_eval"
+    assert data["description"] == "RAG基础评测集"
+
+    assert data["total_cases"] == 2
+    assert len(data["cases"]) == 2
+
+    assert data["cases"][0]["prompt"] == "什么是RAG？"
+    assert (
+        data["cases"][1]["prompt"]
+        == "RAG为什么能降低幻觉？"
+    )
+
+
+async def test_get_dataset_returns_empty_cases(
+    client: AsyncClient,
+) -> None:
+    """没有 Case 的 Dataset 应返回空列表，而不是404。"""
+
+    create_response = await client.post(
+        "/datasets",
+        json={
+            "name": "empty_dataset",
+        },
+    )
+
+    dataset_id = create_response.json()["dataset_id"]
+
+    response = await client.get(
+        f"/datasets/{dataset_id}"
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["dataset_id"] == dataset_id
+    assert data["total_cases"] == 0
+    assert data["cases"] == []
+
+
+async def test_get_dataset_returns_404_when_not_found(
+    client: AsyncClient,
+) -> None:
+    """查询不存在的数据集应返回404。"""
+
+    response = await client.get(
+        "/datasets/999999"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Dataset not found"

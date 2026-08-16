@@ -11,7 +11,7 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse
+from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse, EvaluationDatasetDetailResponse
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
@@ -310,6 +310,56 @@ async def create_evaluation_case(
         prompt=evaluation_case.prompt,
         reference_answer=evaluation_case.reference_answer,
         created_at=evaluation_case.created_at,
+    )
+
+
+@app.get(
+    "/datasets/{dataset_id}",
+    response_model=EvaluationDatasetDetailResponse,
+)
+async def get_dataset(
+    dataset_id: int,
+    session: SessionDep,
+) -> EvaluationDatasetDetailResponse:
+    """查询数据集及其全部评测样本。"""
+
+    dataset = await session.get(
+        EvaluationDatasetRecord,
+        dataset_id,
+    )
+
+    if dataset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found",
+        )
+
+    result = await session.execute(
+        select(EvaluationCaseRecord)
+        .where(
+            EvaluationCaseRecord.dataset_id == dataset_id
+        )
+        .order_by(EvaluationCaseRecord.id.asc())
+    )
+
+    cases = result.scalars().all()
+
+    return EvaluationDatasetDetailResponse(
+        dataset_id=dataset.id,
+        name=dataset.name,
+        description=dataset.description,
+        created_at=dataset.created_at,
+        total_cases=len(cases),
+        cases=[
+            EvaluationCaseResponse(
+                case_id=evaluation_case.id,
+                dataset_id=evaluation_case.dataset_id,
+                prompt=evaluation_case.prompt,
+                reference_answer=evaluation_case.reference_answer,
+                created_at=evaluation_case.created_at,
+            )
+            for evaluation_case in cases
+        ],
     )
 
 @app.post(
