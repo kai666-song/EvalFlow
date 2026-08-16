@@ -74,6 +74,18 @@ class ComparisonRecord(Base):
     
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
 
+    evaluation_run_id: Mapped[int | None] = mapped_column(
+    ForeignKey("evaluation_runs.id"),
+    nullable=True,
+    index=True,
+    )
+
+    evaluation_case_id: Mapped[int | None] = mapped_column(
+    ForeignKey("evaluation_cases.id"),
+    nullable=True,
+    index=True,
+    )
+
 class TaskRecord(Base):
     """数据库中的AI任务记录。"""
 
@@ -156,3 +168,24 @@ class TaskRecord(Base):
         index=True,
     )
 
+
+class EvaluationRunRecord(Base):
+    """一次完整的数据集评测运行。"""
+
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_datasets.id"),
+        nullable=False,
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )   
