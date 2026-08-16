@@ -11,11 +11,11 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse, EvaluationDatasetDetailResponse
+from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse, EvaluationDatasetDetailResponse, EvaluationRunComparisonResponse, EvaluationRunCreate, EvaluationRunResponse
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
-from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord , EvaluationCaseRecord
+from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord , EvaluationCaseRecord, EvaluationRunRecord
 
 
 def _build_task_record(
@@ -359,6 +359,134 @@ async def get_dataset(
                 created_at=evaluation_case.created_at,
             )
             for evaluation_case in cases
+        ],
+    )
+
+
+@app.post(
+    "/evaluation-runs",
+    response_model=EvaluationRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_evaluation_run(
+    payload: EvaluationRunCreate,
+    session: SessionDep,
+) -> EvaluationRunResponse:
+    """基于整个 Dataset 创建一次批量模型评测。"""
+
+    # 1. 确认 Dataset 存在
+    dataset = await session.get(
+        EvaluationDatasetRecord,
+        payload.dataset_id,
+    )
+
+    if dataset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found",
+        )
+
+    # 2. 查询 Dataset 中的全部 Case
+    result = await session.execute(
+        select(EvaluationCaseRecord)
+        .where(
+            EvaluationCaseRecord.dataset_id
+            == payload.dataset_id
+        )
+        .order_by(EvaluationCaseRecord.id.asc())
+    )
+
+    cases = result.scalars().all()
+
+    if not cases:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Dataset has no cases",
+        )
+
+    # 3. 创建 EvaluationRun
+    evaluation_run = EvaluationRunRecord(
+        dataset_id=payload.dataset_id,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    session.add(evaluation_run)
+
+    # 拿到数据库生成的 evaluation_run.id
+    await session.flush()
+
+    comparison_records = []
+
+    # 4. 每条 Case 创建一个 Comparison
+    for evaluation_case in cases:
+        comparison = ComparisonRecord(
+            prompt=evaluation_case.prompt,
+            evaluation_run_id=evaluation_run.id,
+            evaluation_case_id=evaluation_case.id,
+        )
+
+        session.add(comparison)
+
+        # 拿到 comparison.id
+        await session.flush()
+
+        # 5. 每个模型创建一个 Task
+        tasks = [
+            _build_task_record(
+                prompt=evaluation_case.prompt,
+                requested_model=model.value,
+                comparison_id=comparison.id,
+            )
+            for model in payload.models
+        ]
+
+        session.add_all(tasks)
+
+        comparison_records.append(
+            (
+                evaluation_case,
+                comparison,
+                tasks,
+            )
+        )
+
+    # 6. 整批数据统一提交
+    await session.commit()
+
+    # 7. 刷新数据库对象
+    await session.refresh(evaluation_run)
+
+    for _, comparison, tasks in comparison_records:
+        await session.refresh(comparison)
+
+        for task in tasks:
+            await session.refresh(task)
+
+    total_tasks = sum(
+        len(tasks)
+        for _, _, tasks in comparison_records
+    )
+
+    # 8. 构造响应
+    return EvaluationRunResponse(
+        evaluation_run_id=evaluation_run.id,
+        dataset_id=evaluation_run.dataset_id,
+        total_cases=len(cases),
+        total_comparisons=len(comparison_records),
+        total_tasks=total_tasks,
+        comparisons=[
+            EvaluationRunComparisonResponse(
+                evaluation_case_id=evaluation_case.id,
+                comparison_id=comparison.id,
+                prompt=comparison.prompt,
+                total=len(tasks),
+                tasks=[
+                    TaskResponse.model_validate(task)
+                    for task in tasks
+                ],
+            )
+            for evaluation_case, comparison, tasks
+            in comparison_records
         ],
     )
 

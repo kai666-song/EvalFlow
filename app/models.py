@@ -152,3 +152,39 @@ class EvaluationDatasetDetailResponse(EvaluationDatasetResponse):
 
     total_cases: int = Field(ge=0)
     cases: list[EvaluationCaseResponse]
+
+
+class EvaluationRunCreate(BaseModel):
+    """创建一次批量模型评测。"""
+
+    dataset_id: int = Field(gt=0)
+
+    models: list[SupportedModel] = Field(min_length=2, max_length=5)
+
+    @field_validator("models")
+    @classmethod
+    def validate_unique_models(cls, models: list[SupportedModel]) -> list[SupportedModel]:
+        """同一次评测中不允许重复选择模型。"""
+
+        if len(models) != len(set(models)):
+            raise ValueError("models must not contain duplicates")
+
+        return models
+
+
+class EvaluationRunComparisonResponse(ComparisonResponse):
+    """Evaluation Run 中单条 Case 对应的模型比较。"""
+
+    evaluation_case_id: int
+
+
+class EvaluationRunResponse(BaseModel):
+    """一次批量模型评测的创建结果。"""
+
+    evaluation_run_id: int
+    dataset_id: int
+    total_cases: int = Field(ge=0)
+    total_comparisons: int = Field(ge=0)
+    total_tasks: int = Field(ge=0)
+
+    comparisons: list[EvaluationRunComparisonResponse]
