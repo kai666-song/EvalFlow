@@ -490,6 +490,78 @@ async def create_evaluation_run(
         ],
     )
 
+
+@app.get(
+    "/evaluation-runs/{evaluation_run_id}",
+    response_model=EvaluationRunResponse,
+)
+async def get_evaluation_run(
+    evaluation_run_id: int,
+    session: SessionDep,
+) -> EvaluationRunResponse:
+    """查询一次批量评测及其所有 Comparison 和 Task。"""
+
+    evaluation_run = await session.get(
+        EvaluationRunRecord,
+        evaluation_run_id,
+    )
+
+    if evaluation_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    comparison_result = await session.execute(
+        select(ComparisonRecord)
+        .where(
+            ComparisonRecord.evaluation_run_id
+            == evaluation_run_id
+        )
+        .order_by(ComparisonRecord.id.asc())
+    )
+
+    comparisons = comparison_result.scalars().all()
+
+    comparison_responses = []
+    total_tasks = 0
+
+    for comparison in comparisons:
+        task_result = await session.execute(
+            select(TaskRecord)
+            .where(
+                TaskRecord.comparison_id == comparison.id
+            )
+            .order_by(TaskRecord.created_at.asc())
+        )
+
+        tasks = task_result.scalars().all()
+
+        total_tasks += len(tasks)
+
+        comparison_responses.append(
+            EvaluationRunComparisonResponse(
+                evaluation_case_id=comparison.evaluation_case_id,
+                comparison_id=comparison.id,
+                prompt=comparison.prompt,
+                total=len(tasks),
+                tasks=[
+                    TaskResponse.model_validate(task)
+                    for task in tasks
+                ],
+            )
+        )
+
+    return EvaluationRunResponse(
+        evaluation_run_id=evaluation_run.id,
+        dataset_id=evaluation_run.dataset_id,
+        total_cases=len(comparisons),
+        total_comparisons=len(comparisons),
+        total_tasks=total_tasks,
+        comparisons=comparison_responses,
+    )
+
+
 @app.post(
     "/comparisons",
     response_model=ComparisonResponse,
