@@ -1,3 +1,6 @@
+import asyncio
+import app.main as main_module
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -335,3 +338,205 @@ async def test_evaluation_run_keeps_original_case_set(
     assert data["total_cases"] == 1
     assert data["total_comparisons"] == 1
     assert data["total_tasks"] == 2
+
+
+async def test_run_evaluation_run_submits_all_tasks(
+    client: AsyncClient,
+    monkeypatch,
+) -> None:
+    """执行 EvaluationRun 时所有 Task 都应被提交。"""
+
+    scheduled_task_ids: list[str] = []
+
+    async def fake_execute_evaluation_run_tasks(
+        task_ids: list[str],
+        max_concurrency: int = 5,
+    ) -> None:
+        scheduled_task_ids.extend(task_ids)
+
+    monkeypatch.setattr(
+        main_module,
+        "execute_evaluation_run_tasks",
+        fake_execute_evaluation_run_tasks,
+    )
+
+    dataset_response = await client.post(
+        "/datasets",
+        json={
+            "name": "run_test",
+        },
+    )
+
+    dataset_id = dataset_response.json()["dataset_id"]
+
+    await client.post(
+        f"/datasets/{dataset_id}/cases",
+        json={"prompt": "问题一"},
+    )
+
+    await client.post(
+        f"/datasets/{dataset_id}/cases",
+        json={"prompt": "问题二"},
+    )
+
+    create_response = await client.post(
+        "/evaluation-runs",
+        json={
+            "dataset_id": dataset_id,
+            "models": [
+                "qwen3.7-flash",
+                "glm-5.2",
+            ],
+        },
+    )
+
+    evaluation_run_id = (
+        create_response.json()["evaluation_run_id"]
+    )
+
+    response = await client.post(
+        f"/evaluation-runs/{evaluation_run_id}/run"
+    )
+
+    assert response.status_code == 202
+
+    data = response.json()
+
+    assert data["total_cases"] == 2
+    assert data["total_comparisons"] == 2
+    assert data["total_tasks"] == 4
+
+    response_task_ids = {
+        task["task_id"]
+        for comparison in data["comparisons"]
+        for task in comparison["tasks"]
+    }
+
+    assert all(
+        task["status"] == "PROCESSING"
+        for comparison in data["comparisons"]
+        for task in comparison["tasks"]
+    )
+
+    assert set(scheduled_task_ids) == response_task_ids
+
+
+async def test_run_evaluation_run_returns_404_when_not_found(
+    client: AsyncClient,
+) -> None:
+    response = await client.post(
+        "/evaluation-runs/999999/run"
+    )
+
+    assert response.status_code == 404
+    assert (
+        response.json()["detail"]
+        == "Evaluation run not found"
+    )
+
+
+async def test_run_evaluation_run_rejects_second_submission(
+    client: AsyncClient,
+    monkeypatch,
+) -> None:
+    async def fake_execute_evaluation_run_tasks(
+        task_ids: list[str],
+        max_concurrency: int = 5,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        main_module,
+        "execute_evaluation_run_tasks",
+        fake_execute_evaluation_run_tasks,
+    )
+
+    dataset_response = await client.post(
+        "/datasets",
+        json={"name": "duplicate_run_test"},
+    )
+
+    dataset_id = dataset_response.json()["dataset_id"]
+
+    await client.post(
+        f"/datasets/{dataset_id}/cases",
+        json={"prompt": "测试问题"},
+    )
+
+    create_response = await client.post(
+        "/evaluation-runs",
+        json={
+            "dataset_id": dataset_id,
+            "models": [
+                "qwen3.7-flash",
+                "glm-5.2",
+            ],
+        },
+    )
+
+    evaluation_run_id = (
+        create_response.json()["evaluation_run_id"]
+    )
+
+    first_response = await client.post(
+        f"/evaluation-runs/{evaluation_run_id}/run"
+    )
+
+    assert first_response.status_code == 202
+
+    second_response = await client.post(
+        f"/evaluation-runs/{evaluation_run_id}/run"
+    )
+
+    assert second_response.status_code == 409
+    assert (
+        second_response.json()["detail"]
+        == "Evaluation run cannot be run"
+    )
+
+
+async def test_evaluation_run_execution_respects_concurrency_limit(
+    monkeypatch,
+) -> None:
+    """EvaluationRun 执行器不应超过指定最大并发数。"""
+
+    active_count = 0
+    max_active_count = 0
+
+    async def fake_execute_task(
+        task_id: str,
+    ) -> None:
+        nonlocal active_count
+        nonlocal max_active_count
+
+        active_count += 1
+
+        max_active_count = max(
+            max_active_count,
+            active_count,
+        )
+
+        await asyncio.sleep(0.02)
+
+        active_count -= 1
+
+    monkeypatch.setattr(
+        main_module,
+        "execute_task",
+        fake_execute_task,
+    )
+
+    await main_module.execute_evaluation_run_tasks(
+        [
+            "task-1",
+            "task-2",
+            "task-3",
+            "task-4",
+            "task-5",
+            "task-6",
+        ],
+        max_concurrency=2,
+    )
+
+    assert max_active_count == 2
+    assert active_count == 0

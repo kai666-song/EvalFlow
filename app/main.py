@@ -216,6 +216,29 @@ async def execute_comparison_tasks(task_ids: list[str]) -> None:
         *(execute_task(task_id) for task_id in task_ids)
     )    
 
+
+async def execute_evaluation_run_tasks(
+    task_ids: list[str],
+    max_concurrency: int = 5,
+) -> None:
+    """以受控并发方式执行整批 Evaluation Task。"""
+
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def execute_with_limit(
+        task_id: str,
+    ) -> None:
+        async with semaphore:
+            await execute_task(task_id)
+
+    await asyncio.gather(
+        *(
+            execute_with_limit(task_id)
+            for task_id in task_ids
+        )
+    )
+
+
 @app.get("/health")
 async def health_check() -> dict[str, str]:
     """检查服务是否正常运行。"""
@@ -558,6 +581,145 @@ async def get_evaluation_run(
         total_cases=len(comparisons),
         total_comparisons=len(comparisons),
         total_tasks=total_tasks,
+        comparisons=comparison_responses,
+    )
+
+
+@app.post(
+    "/evaluation-runs/{evaluation_run_id}/run",
+    response_model=EvaluationRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_evaluation_run(
+    evaluation_run_id: int,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+) -> EvaluationRunResponse:
+    """提交一次 EvaluationRun 中的全部模型任务。"""
+
+    evaluation_run = await session.get(
+        EvaluationRunRecord,
+        evaluation_run_id,
+    )
+
+    if evaluation_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    # 查询此次 EvaluationRun 下的所有 Comparison
+    comparison_result = await session.execute(
+        select(ComparisonRecord)
+        .where(
+            ComparisonRecord.evaluation_run_id
+            == evaluation_run_id
+        )
+        .order_by(ComparisonRecord.id.asc())
+    )
+
+    comparisons = comparison_result.scalars().all()
+
+    if not comparisons:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Evaluation run has no comparisons",
+        )
+
+    comparison_ids = [
+        comparison.id
+        for comparison in comparisons
+    ]
+
+    # 一次查询出所有 Comparison 下的 Task
+    task_result = await session.execute(
+        select(TaskRecord)
+        .where(
+            TaskRecord.comparison_id.in_(
+                comparison_ids
+            )
+        )
+        .order_by(TaskRecord.created_at.asc())
+    )
+
+    tasks = task_result.scalars().all()
+
+    if not tasks:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Evaluation run has no tasks",
+        )
+
+    # 目前 EvaluationRun 只允许执行一次
+    if any(
+        task.status != TaskStatus.PENDING.value
+        for task in tasks
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Evaluation run cannot be run",
+        )
+
+    # 整批任务先统一进入 PROCESSING
+    for task in tasks:
+        task.status = TaskStatus.PROCESSING.value
+        task.result = None
+        task.error = None
+
+    await session.commit()
+
+    for task in tasks:
+        await session.refresh(task)
+
+    task_ids = [
+        task.task_id
+        for task in tasks
+    ]
+
+    background_tasks.add_task(
+        execute_evaluation_run_tasks,
+        task_ids,
+    )
+
+    # 将 Task 按 Comparison 分组，方便构造响应
+    tasks_by_comparison: dict[int, list[TaskRecord]] = {}
+
+    for task in tasks:
+        if task.comparison_id is None:
+            continue
+
+        tasks_by_comparison.setdefault(
+            task.comparison_id,
+            [],
+        ).append(task)
+
+    comparison_responses = []
+
+    for comparison in comparisons:
+        comparison_tasks = tasks_by_comparison.get(
+            comparison.id,
+            [],
+        )
+
+        comparison_responses.append(
+            EvaluationRunComparisonResponse(
+                evaluation_case_id=comparison.evaluation_case_id,
+                comparison_id=comparison.id,
+                prompt=comparison.prompt,
+                total=len(comparison_tasks),
+                tasks=[
+                    TaskResponse.model_validate(task)
+                    for task in comparison_tasks
+                ],
+            )
+        )
+
+    return EvaluationRunResponse(
+        evaluation_run_id=evaluation_run.id,
+        dataset_id=evaluation_run.dataset_id,
+        total_cases=len(comparisons),
+        total_comparisons=len(comparisons),
+        total_tasks=len(tasks),
         comparisons=comparison_responses,
     )
 
