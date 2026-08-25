@@ -277,6 +277,18 @@ demo_evaluation_report.json
 
 该文件为本地运行产物，不应提交到 Git。
 
+## 已验证的真实 Demo
+
+2026-08-25 使用 2 条 EvaluationCase 和 2 个模型完成端到端验证：
+
+```text
+2 Cases
+2 Models
+4 Generation Tasks
+4 Keyword Evaluation Results
+4 LLM Judge Evaluation Results
+2 Evaluation Reports
+
 ## 主要 API
 
 | 方法 | 路径 | 用途 |
