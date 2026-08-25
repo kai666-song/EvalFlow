@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BOOLEAN, DateTime, Float, ForeignKey, Integer, JSON, String, Text, Boolean, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base

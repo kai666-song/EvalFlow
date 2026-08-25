@@ -8,6 +8,7 @@ logs/
 .vscode/
 smoke_result.json
 model_comparison_result.json
+demo_evaluation_report.json
 
 # Local API request payloads
 body.json
