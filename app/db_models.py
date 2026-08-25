@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BOOLEAN, DateTime, Float, ForeignKey, Integer, JSON, String, Text, Boolean, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -57,6 +57,12 @@ class EvaluationCaseRecord(Base):
     reference_answer: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
+    )
+
+    expected_keywords: Mapped[list[str] | None] = mapped_column(
+        JSON,
+        nullable=True,
+        default=list,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -166,6 +172,67 @@ class TaskRecord(Base):
         ForeignKey("comparisons.id"),
         nullable=True,
         index=True,
+    )
+
+
+class EvaluationResultRecord(Base):
+    """针对单个模型任务的一条评测结果。"""
+
+    __tablename__ = "evaluation_results"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id",
+            "evaluator_name",
+            "evaluator_version",
+            name="uq_evaluation_results_task_evaluator_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("tasks.task_id"),
+        nullable=False,
+        index=True,
+    )
+
+    evaluator_name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    evaluator_version: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    evaluator_config: Mapped[dict[str, object] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    passed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+
+    reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
     )
 
 

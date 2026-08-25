@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, field_validator, StringConstraints
-from typing import Annotated
+from typing import Annotated, Any
 
 
 class SupportedModel(StrEnum):
@@ -19,6 +19,19 @@ class TaskStatus(StrEnum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
 
+
+class EvaluatorType(StrEnum):
+    """当前平台提供的自动化 Evaluator。"""
+
+    KEYWORD_MATCH = "keyword_match"
+    LLM_JUDGE = "llm_judge"
+
+
+class BadCaseType(StrEnum):
+    """Report 中可确认的问题类型。"""
+
+    EXECUTION_FAILED = "EXECUTION_FAILED"
+    QUALITY_FAILED = "QUALITY_FAILED"
 
 class TaskCreate(BaseModel):
     prompt: str = Field(
@@ -136,6 +149,40 @@ class EvaluationCaseCreate(BaseModel):
         max_length=10000,
     )
 
+    expected_keywords: list[
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True,
+                min_length=1,
+                max_length=100,
+            ),
+        ]
+    ] = Field(
+        default_factory=list,
+        max_length=30,
+    )
+
+    @field_validator("expected_keywords")
+    @classmethod
+    def validate_unique_keywords(
+        cls,
+        keywords: list[str],
+    ) -> list[str]:
+        """关键词规则应明确且不重复。"""
+
+        normalized_keywords = [
+            " ".join(keyword.casefold().split())
+            for keyword in keywords
+        ]
+
+        if len(normalized_keywords) != len(set(normalized_keywords)):
+            raise ValueError(
+                "expected_keywords must not contain duplicates"
+            )
+
+        return keywords
+
 
 class EvaluationCaseResponse(BaseModel):
     """单条评测样本响应。"""
@@ -144,6 +191,7 @@ class EvaluationCaseResponse(BaseModel):
     dataset_id: int
     prompt: str
     reference_answer: str | None
+    expected_keywords: list[str]
     created_at: datetime
 
 
@@ -188,3 +236,154 @@ class EvaluationRunResponse(BaseModel):
     total_tasks: int = Field(ge=0)
 
     comparisons: list[EvaluationRunComparisonResponse]
+
+
+class EvaluationRunEvaluateRequest(BaseModel):
+    """指定对一个 EvaluationRun 使用哪种 Evaluator。"""
+
+    evaluator: EvaluatorType = EvaluatorType.KEYWORD_MATCH
+
+
+class EvaluationResultResponse(BaseModel):
+    """单个 Evaluator 对一个 Task 的质量评估结果。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: str
+    evaluator_name: str
+    evaluator_version: str
+    evaluator_config: dict[str, Any] | None
+    score: float = Field(ge=0, le=1)
+    passed: bool
+    reason: str | None
+    created_at: datetime
+
+
+class SkippedEvaluationTaskResponse(BaseModel):
+    """没有产生质量结果的 Task 及其原因。"""
+
+    task_id: str
+    reason: str
+
+
+class EvaluationRunEvaluateResponse(BaseModel):
+    """提交一次 Run 级评测后的汇总结果。"""
+
+    evaluation_run_id: int
+    evaluator_name: str
+    evaluator_version: str
+    evaluated_tasks: int = Field(ge=0)
+    skipped_tasks: list[SkippedEvaluationTaskResponse]
+    results: list[EvaluationResultResponse]
+
+
+class EvaluationReportMetricsResponse(BaseModel):
+    """一次 Run 或单个模型的聚合指标。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total_tasks: int = Field(ge=0)
+    successful_tasks: int = Field(ge=0)
+    failed_tasks: int = Field(ge=0)
+    evaluated_tasks: int = Field(ge=0)
+    passed_tasks: int = Field(ge=0)
+    quality_failed_tasks: int = Field(ge=0)
+    unevaluated_tasks: int = Field(ge=0)
+
+    execution_success_rate: float = Field(ge=0, le=1)
+    evaluation_coverage: float = Field(ge=0, le=1)
+
+    average_score: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
+
+    pass_rate: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
+
+    average_latency_ms: float | None = Field(
+        default=None,
+        ge=0,
+    )
+
+    total_tokens: int = Field(ge=0)
+
+    average_total_tokens: float | None = Field(
+        default=None,
+        ge=0,
+    )
+
+
+class EvaluationModelReportResponse(
+    EvaluationReportMetricsResponse
+):
+    """单个 requested_model 的聚合指标。"""
+
+    requested_model: str
+
+
+class EvaluationReportBadCaseResponse(BaseModel):
+    """可确认的执行失败或质量失败 Case。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    issue_type: BadCaseType
+
+    evaluation_case_id: int | None
+    comparison_id: int
+    task_id: str
+
+    requested_model: str
+    prompt: str
+    reference_answer: str | None
+    model_answer: str | None
+
+    score: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
+
+    task_error: str | None
+    evaluation_reason: str | None
+
+
+class EvaluationReportUnassessedCaseResponse(BaseModel):
+    """执行成功但没有指定 Evaluator 结果的 Case。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    evaluation_case_id: int | None
+    comparison_id: int
+    task_id: str
+
+    requested_model: str
+    prompt: str
+    reference_answer: str | None
+    model_answer: str | None
+    reason: str
+
+
+class EvaluationRunReportResponse(BaseModel):
+    """一次 EvaluationRun 的质量与效率报告。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    evaluation_run_id: int
+    dataset_id: int
+
+    evaluator_name: str
+    evaluator_version: str
+
+    overall: EvaluationReportMetricsResponse
+    models: list[EvaluationModelReportResponse]
+
+    bad_cases: list[EvaluationReportBadCaseResponse]
+    unassessed_cases: list[
+        EvaluationReportUnassessedCaseResponse
+    ]

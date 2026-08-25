@@ -11,11 +11,17 @@ from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 
-from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse, EvaluationDatasetDetailResponse, EvaluationRunComparisonResponse, EvaluationRunCreate, EvaluationRunResponse
+from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse, EvaluationDatasetDetailResponse, EvaluationRunComparisonResponse, EvaluationRunCreate, EvaluationRunResponse, EvaluationResultResponse,EvaluationRunEvaluateResponse, SkippedEvaluationTaskResponse, EvaluationRunEvaluateRequest, EvaluatorType, EvaluationRunReportResponse
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
-from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord , EvaluationCaseRecord, EvaluationRunRecord
+from app.db_models import ComparisonRecord, TaskRecord, EvaluationDatasetRecord , EvaluationCaseRecord, EvaluationRunRecord, EvaluationResultRecord
+from app.evaluation_service import (
+    EvaluationRunNotReadyError,
+    evaluate_evaluation_run,
+)
+from app.evaluators.factory import create_evaluator
+from app.report_service import EvaluationReportNotReadyError, build_evaluation_run_report
 
 
 def _build_task_record(
@@ -320,6 +326,7 @@ async def create_evaluation_case(
         prompt=payload.prompt,
         reference_answer=payload.reference_answer,
         created_at=datetime.now(timezone.utc),
+        expected_keywords=payload.expected_keywords,
     )
 
     session.add(evaluation_case)
@@ -332,6 +339,9 @@ async def create_evaluation_case(
         dataset_id=evaluation_case.dataset_id,
         prompt=evaluation_case.prompt,
         reference_answer=evaluation_case.reference_answer,
+        expected_keywords=(
+            evaluation_case.expected_keywords or []
+        ),
         created_at=evaluation_case.created_at,
     )
 
@@ -380,6 +390,7 @@ async def get_dataset(
                 prompt=evaluation_case.prompt,
                 reference_answer=evaluation_case.reference_answer,
                 created_at=evaluation_case.created_at,
+                expected_keywords=evaluation_case.expected_keywords or [],
             )
             for evaluation_case in cases
         ],
@@ -725,6 +736,122 @@ async def run_evaluation_run(
 
 
 @app.post(
+    "/evaluation-runs/{evaluation_run_id}/evaluate",
+    response_model=EvaluationRunEvaluateResponse,
+)
+async def evaluate_evaluation_run_endpoint(
+    evaluation_run_id: int,
+    payload: EvaluationRunEvaluateRequest | None = None,
+    session: SessionDep = None,
+) -> EvaluationRunEvaluateResponse:
+    """使用指定 Evaluator 评测一个已完成的 EvaluationRun。"""
+
+    evaluation_run = await session.get(
+        EvaluationRunRecord,
+        evaluation_run_id,
+    )
+
+    if evaluation_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    evaluator_type = (
+        payload.evaluator
+        if payload is not None
+        else EvaluatorType.KEYWORD_MATCH
+    )
+
+    evaluator = create_evaluator(evaluator_type)
+
+    try:
+        evaluation = await evaluate_evaluation_run(
+            session,
+            evaluation_run_id=evaluation_run_id,
+            evaluator=evaluator,
+        )
+    except EvaluationRunNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    return EvaluationRunEvaluateResponse(
+        evaluation_run_id=evaluation_run_id,
+        evaluator_name=evaluation.evaluator_name,
+        evaluator_version=evaluation.evaluator_version,
+        evaluated_tasks=len(evaluation.results),
+        skipped_tasks=[
+            SkippedEvaluationTaskResponse(
+                task_id=item.task_id,
+                reason=item.reason,
+            )
+            for item in evaluation.skipped_tasks
+        ],
+        results=[
+            EvaluationResultResponse.model_validate(item)
+            for item in evaluation.results
+        ],
+    )
+
+
+@app.get(
+    "/evaluation-runs/{evaluation_run_id}/report",
+    response_model=EvaluationRunReportResponse,
+)
+async def get_evaluation_run_report(
+    evaluation_run_id: int,
+    session: SessionDep,
+    evaluator: EvaluatorType = Query(
+        default=EvaluatorType.LLM_JUDGE,
+    ),
+    evaluator_version: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=50,
+    ),
+) -> EvaluationRunReportResponse:
+    """实时生成一次 EvaluationRun 的聚合报告。"""
+
+    evaluation_run = await session.get(
+        EvaluationRunRecord,
+        evaluation_run_id,
+    )
+
+    if evaluation_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    current_evaluator = create_evaluator(evaluator)
+
+    selected_version = (
+        evaluator_version
+        or current_evaluator.version
+    )
+
+    try:
+        report = await build_evaluation_run_report(
+            session,
+            evaluation_run_id=evaluation_run_id,
+            dataset_id=evaluation_run.dataset_id,
+            evaluator_name=evaluator.value,
+            evaluator_version=selected_version,
+        )
+    except EvaluationReportNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    return EvaluationRunReportResponse.model_validate(
+        report
+    )
+
+
+@app.post(
     "/comparisons",
     response_model=ComparisonResponse,
     status_code=status.HTTP_201_CREATED,
@@ -910,6 +1037,43 @@ async def get_task(task_id: str, session: SessionDep) -> TaskResponse:
         )
 
     return TaskResponse.model_validate(task)
+
+
+@app.get(
+    "/tasks/{task_id}/evaluation-results",
+    response_model=list[EvaluationResultResponse],
+)
+async def list_task_evaluation_results(
+    task_id: str,
+    session: SessionDep,
+) -> list[EvaluationResultResponse]:
+    """查询一个 Task 的全部质量评估结果。"""
+
+    task = await session.get(TaskRecord, task_id)
+
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    result = await session.execute(
+        select(EvaluationResultRecord)
+        .where(
+            EvaluationResultRecord.task_id == task_id
+        )
+        .order_by(
+            EvaluationResultRecord.created_at.asc()
+        )
+    )
+
+    evaluation_results = result.scalars().all()
+
+    return [
+        EvaluationResultResponse.model_validate(item)
+        for item in evaluation_results
+    ]
+
 
 @app.post(
     "/tasks/{task_id}/run",
