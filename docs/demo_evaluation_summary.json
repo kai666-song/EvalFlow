@@ -1,0 +1,60 @@
+{
+  "artifact_type": "sanitized_real_demo_summary",
+  "generated_at": "2026-08-25T15:17:31.580202+00:00",
+  "notes": [
+    "Generated from a real EvalFlow end-to-end run.",
+    "Task IDs, database IDs and full model answers were removed."
+  ],
+  "experiment": {
+    "cases": 2,
+    "models": [
+      "qwen3.7-flash",
+      "glm-5.2"
+    ],
+    "generation_tasks": 4,
+    "keyword_evaluation_results": 4,
+    "llm_judge_evaluation_results": 4,
+    "reports": 2
+  },
+  "execution": {
+    "successful_tasks": 4,
+    "failed_tasks": 0,
+    "execution_success_rate": 1.0,
+    "average_latency_ms": 20362.8175,
+    "total_tokens": 5607,
+    "average_total_tokens": 1401.75
+  },
+  "evaluators": {
+    "keyword_match/1.0": {
+      "evaluated_tasks": 4,
+      "evaluation_coverage": 1.0,
+      "average_score": 0.8541666666666666,
+      "pass_rate": 0.5,
+      "quality_failed_tasks": 2
+    },
+    "llm_judge/1.0": {
+      "judge_model": "qwen3.7-flash",
+      "prompt_version": "1.0",
+      "passing_score": 70,
+      "evaluated_tasks": 4,
+      "evaluation_coverage": 1.0,
+      "average_score": 0.965,
+      "pass_rate": 1.0,
+      "quality_failed_tasks": 0
+    }
+  },
+  "models": {
+    "qwen3.7-flash": {
+      "tasks": 2,
+      "average_latency_ms": 15859.205000000002,
+      "total_tokens": 3044,
+      "llm_judge_average_score": 0.965
+    },
+    "glm-5.2": {
+      "tasks": 2,
+      "average_latency_ms": 24866.43,
+      "total_tokens": 2563,
+      "llm_judge_average_score": 0.965
+    }
+  }
+}

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db_models import (
@@ -10,8 +11,16 @@ from app.db_models import (
     EvaluationResultRecord,
     TaskRecord,
 )
-from app.evaluators.base import BaseEvaluator, EvaluationContext
+from app.evaluators.base import (
+    BaseEvaluator,
+    EvaluationContext,
+    EvaluationOutcome,
+)
+from app.logger import get_logger
 from app.models import TaskStatus
+
+
+logger = get_logger()
 
 
 class EvaluationRunNotReadyError(RuntimeError):
@@ -30,6 +39,71 @@ class EvaluationRunEvaluation:
     evaluator_version: str
     results: list[EvaluationResultRecord]
     skipped_tasks: list[SkippedEvaluationTask]
+
+
+def _select_evaluation_result(
+    *,
+    task_id: str,
+    evaluator_name: str,
+    evaluator_version: str,
+):
+    return (
+        select(EvaluationResultRecord)
+        .where(
+            EvaluationResultRecord.task_id == task_id,
+            EvaluationResultRecord.evaluator_name
+            == evaluator_name,
+            EvaluationResultRecord.evaluator_version
+            == evaluator_version,
+        )
+    )
+
+
+async def _persist_evaluation_result(
+    session: AsyncSession,
+    *,
+    task_id: str,
+    evaluator: BaseEvaluator,
+    outcome: EvaluationOutcome,
+) -> EvaluationResultRecord:
+    statement = (
+        sqlite_insert(EvaluationResultRecord)
+        .values(
+            task_id=task_id,
+            evaluator_name=evaluator.name,
+            evaluator_version=evaluator.version,
+            evaluator_config=evaluator.config,
+            score=outcome.score,
+            passed=outcome.passed,
+            reason=outcome.reason,
+            created_at=datetime.now(timezone.utc),
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                "task_id",
+                "evaluator_name",
+                "evaluator_version",
+            ]
+        )
+    )
+
+    await session.execute(statement)
+    await session.commit()
+
+    result = await session.scalar(
+        _select_evaluation_result(
+            task_id=task_id,
+            evaluator_name=evaluator.name,
+            evaluator_version=evaluator.version,
+        )
+    )
+
+    if result is None:
+        raise RuntimeError(
+            "Evaluation result could not be persisted"
+        )
+
+    return result
 
 
 async def evaluate_evaluation_run(
@@ -170,6 +244,7 @@ async def evaluate_evaluation_run(
         existing_result = await session.scalar(
             existing_statement
         )
+        await session.commit()
 
         if existing_result is not None:
             results.append(existing_result)
@@ -186,19 +261,30 @@ async def evaluate_evaluation_run(
             )
             continue
 
-        evaluation_result = EvaluationResultRecord(
-            task_id=task.task_id,
-            evaluator_name=evaluator.name,
-            evaluator_version=evaluator.version,
-            evaluator_config=evaluator.config,
-            score=outcome.score,
-            passed=outcome.passed,
-            reason=outcome.reason,
-            created_at=datetime.now(timezone.utc),
-        )
+        except Exception as exc:
+            logger.exception(
+                "evaluator_failed_unexpected "
+                "task_id=%s error_type=%s",
+                task.task_id,
+                type(exc).__name__,
+            )
+            skipped_tasks.append(
+                SkippedEvaluationTask(
+                    task_id=task.task_id,
+                    reason=(
+                        "Evaluator failed unexpectedly: "
+                        f"{type(exc).__name__}"
+                    ),
+                )
+            )
+            continue
 
-        session.add(evaluation_result)
-        await session.flush()
+        evaluation_result = await _persist_evaluation_result(
+            session,
+            task_id=task.task_id,
+            evaluator=evaluator,
+            outcome=outcome,
+        )
 
         results.append(evaluation_result)
 

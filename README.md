@@ -1,11 +1,13 @@
 ﻿# EvalFlow
 
+[![Tests](https://github.com/kai666-song/EvalFlow/actions/workflows/tests.yml/badge.svg)](https://github.com/kai666-song/EvalFlow/actions/workflows/tests.yml)
+
 面向 LLM 应用开发过程的大模型质量评估与优化工具。
 
 EvalFlow 通过标准化测试数据集、可重复的 Evaluation Run、多模型横向比较和可扩展 Evaluator Framework，帮助 AI 应用团队：
 
 - 比较不同模型的回答质量和推理成本；
-- 量化验证 Prompt 或模型调整是否真正提升效果；
+- 在固定数据集上复测 Prompt 或模型调整后的效果；
 - 区分模型调用失败和回答质量不合格；
 - 发现并结构化分析 Bad Case；
 - 为模型选择和 LLM 应用优化提供依据。
@@ -52,7 +54,7 @@ EvaluationRun
 - 为 Dataset 添加 EvaluationCase；
 - 保存参考答案和确定性关键词规则；
 - 基于固定 Dataset 创建可重复 EvaluationRun；
-- Run 创建后固化当时的 Case 集合。
+- Run 创建后固化 Case、Comparison 与 Task 的对应关系。
 
 ### 多模型执行
 
@@ -106,7 +108,7 @@ EvaluationOutcome
 
 ### Evaluation Report
 
-Report 按 `requested_model` 实时聚合：
+Report 按 `requested_model` 动态聚合：
 
 - 执行成功率；
 - 评测覆盖率；
@@ -116,6 +118,15 @@ Report 按 `requested_model` 实时聚合：
 - 总 Token 与平均 Token。
 
 Report 不单独持久化，而是根据 Task 和 EvaluationResult 实时生成，避免派生数据过期。
+
+## 项目验证
+
+- 自动化测试覆盖任务执行、数据集、模型对比、Evaluator、Report、异常恢复与输入校验；
+- GitHub Actions 会在 push 和 pull request 时自动运行完整测试；
+- 2026-08-25 已使用 Qwen 与 GLM 完成真实端到端 Demo；
+- 脱敏后的运行指标见 [`docs/demo_evaluation_summary.json`](docs/demo_evaluation_summary.json)。
+
+真实 Demo 中，4 个生成任务均执行成功，两种 Evaluator 的评测覆盖率均为 100%。关键词规则的总体平均分为 0.854，通过率为 50%；LLM-as-a-Judge 的总体平均分为 0.965，通过率为 100%。两种评测结果的差异也展示了确定性规则可解释、但容易受字面匹配影响的特点。
 
 ### Bad Case 分析
 
@@ -288,6 +299,20 @@ demo_evaluation_report.json
 4 Keyword Evaluation Results
 4 LLM Judge Evaluation Results
 2 Evaluation Reports
+```
+
+脱敏后的真实运行摘要：
+
+| 指标 | 结果 |
+|---|---:|
+| 模型任务执行成功率 | 100% |
+| KeywordEvaluator 覆盖率 | 100% |
+| KeywordEvaluator 平均分 | 0.854 |
+| LLMJudgeEvaluator 覆盖率 | 100% |
+| LLMJudgeEvaluator 平均分 | 0.965 |
+| 总 Token | 5,607 |
+
+完整的脱敏结构化摘要见 [`docs/demo_evaluation_summary.json`](docs/demo_evaluation_summary.json)。
 
 ## 主要 API
 
@@ -355,7 +380,7 @@ evaluator_config
 
 ### Report 不持久化
 
-Report 是 Task 和 EvaluationResult 的派生数据。当前数据集规模下实时计算更简单、可靠，也避免同步和缓存失效问题。
+Report 是 Task 和 EvaluationResult 的派生数据。当前数据集规模下按请求计算更简单、可靠，也避免同步和缓存失效问题。
 
 ### Judge 失败不产生低分结果
 
