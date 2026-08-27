@@ -119,6 +119,20 @@ Report 按 `requested_model` 动态聚合：
 
 Report 不单独持久化，而是根据 Task 和 EvaluationResult 实时生成，避免派生数据过期。
 
+### Web 演示工作台
+
+项目包含独立的 React + Vite + TypeScript 前端，直接读取 FastAPI 与
+SQLite 中的真实评测数据，覆盖以下产品流程：
+
+- 评测概览：数据集、运行次数、模型和最近评测状态；
+- 创建评测：选择数据集、双模型、评估器与受控并发参数；
+- 运行详情：自动轮询任务进度，区分成功、等待、执行失败和部分失败；
+- 对比报告：质量分、通过率、覆盖率、延迟和 Token 构成；
+- Bad Case：筛选质量失败、执行失败和未评估样本，并查看双模型回答与评分理由。
+
+前端不维护独立的演示假数据。界面中的统计与样本内容均来自当前
+EvalFlow API；本地已有的真实 Demo Run 可直接用于页面展示。
+
 ## 项目验证
 
 - 自动化测试覆盖任务执行、数据集、模型对比、Evaluator、Report、异常恢复与输入校验；
@@ -157,6 +171,8 @@ QUALITY_FAILED
 - OpenAI-compatible SDK
 - pytest + pytest-asyncio
 - uv
+- React 19 + TypeScript
+- Vite
 
 ## 项目结构
 
@@ -175,9 +191,18 @@ app/
     llm_judge.py          LLMJudgeEvaluator
     factory.py            Evaluator Factory
 
+frontend/
+  src/
+    pages/                概览、创建、运行详情与报告页面
+    components/           工作台布局与通用状态组件
+    api.ts                FastAPI 客户端
+    types.ts              前后端数据契约
+  package.json            前端依赖与构建命令
+
 migrations/               Alembic 数据库迁移
 tests/                    自动化测试
 scripts/                  Smoke Test 与完整 Demo
+output/playwright/         浏览器验收与作品集候选截图
 ```
 
 ## 快速开始
@@ -221,7 +246,7 @@ uv run alembic upgrade head
 uv run alembic current
 ```
 
-### 5. 启动服务
+### 5. 启动后端服务
 
 ```powershell
 uv run fastapi dev app/main.py
@@ -239,7 +264,37 @@ http://127.0.0.1:8000
 http://127.0.0.1:8000/docs
 ```
 
-### 6. 运行测试
+### 6. 启动 Web 前端
+
+在新的 PowerShell 窗口中：
+
+~~~powershell
+Set-Location -LiteralPath "frontend"
+npm install
+Copy-Item -LiteralPath ".env.example" -Destination ".env.local"
+npm run dev
+~~~
+
+前端默认运行在：
+
+~~~text
+http://127.0.0.1:5173
+~~~
+
+默认 API 地址为 http://127.0.0.1:8000。如需连接其他后端，
+编辑 frontend/.env.local：
+
+~~~dotenv
+VITE_API_BASE_URL=http://127.0.0.1:8000
+~~~
+
+生产构建验证：
+
+~~~powershell
+npm run build
+~~~
+
+### 7. 运行后端测试
 
 ```powershell
 uv run pytest -q
@@ -325,8 +380,10 @@ demo_evaluation_report.json
 | `POST` | `/comparisons` | 创建多模型 Comparison |
 | `POST` | `/comparisons/{id}/run` | 执行 Comparison |
 | `POST` | `/datasets` | 创建 Dataset |
+| `GET` | `/datasets` | 查询 Dataset 列表与 Case 数量 |
 | `POST` | `/datasets/{id}/cases` | 添加 EvaluationCase |
 | `POST` | `/evaluation-runs` | 创建 EvaluationRun |
+| `GET` | `/evaluation-runs` | 查询最近 Run、状态与模型进度 |
 | `POST` | `/evaluation-runs/{id}/run` | 执行整个 Run |
 | `POST` | `/evaluation-runs/{id}/evaluate` | 执行指定 Evaluator |
 | `GET` | `/tasks/{id}/evaluation-results` | 查询 Task 评测结果 |
@@ -399,7 +456,7 @@ EvalFlow 当前聚焦单机环境下的 LLM 应用质量评估，不包含：
 - 多租户；
 - 分布式任务队列；
 - Kubernetes；
-- 复杂 Dashboard；
+- 企业级复杂 Dashboard 与 BI 系统；
 - Agent 生命周期管理。
 
 这种范围控制使项目能够集中展示 AI 评测问题理解、解决方案设计和工程实现能力。

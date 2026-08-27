@@ -63,6 +63,10 @@ async def test_create_evaluation_run_creates_comparisons_and_tasks(
     assert data["total_comparisons"] == 2
     assert data["total_tasks"] == 4
     assert len(data["comparisons"]) == 2
+    assert data["evaluator_name"] == "keyword_match"
+    assert data["evaluator_version"] == "1.0"
+    assert data["max_concurrency"] == 2
+    assert data["created_at"] is not None
 
     assert all(
         comparison["total"] == 2
@@ -347,12 +351,14 @@ async def test_run_evaluation_run_submits_all_tasks(
     """执行 EvaluationRun 时所有 Task 都应被提交。"""
 
     scheduled_task_ids: list[str] = []
+    scheduled_concurrency: list[int] = []
 
     async def fake_execute_evaluation_run_tasks(
         task_ids: list[str],
         max_concurrency: int = 5,
     ) -> None:
         scheduled_task_ids.extend(task_ids)
+        scheduled_concurrency.append(max_concurrency)
 
     monkeypatch.setattr(
         main_module,
@@ -419,6 +425,73 @@ async def test_run_evaluation_run_submits_all_tasks(
     )
 
     assert set(scheduled_task_ids) == response_task_ids
+    assert scheduled_concurrency == [2]
+
+
+async def test_list_evaluation_runs_returns_progress_and_config(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    dataset_response = await client.post(
+        "/datasets",
+        json={"name": "overview_dataset"},
+    )
+    dataset_id = dataset_response.json()["dataset_id"]
+
+    await client.post(
+        f"/datasets/{dataset_id}/cases",
+        json={
+            "prompt": "测试问题",
+            "reference_answer": "测试答案",
+        },
+    )
+
+    run_response = await client.post(
+        "/evaluation-runs",
+        json={
+            "dataset_id": dataset_id,
+            "models": [
+                "qwen3.7-flash",
+                "glm-5.2",
+            ],
+            "evaluator": "llm_judge",
+            "max_concurrency": 3,
+        },
+    )
+    run_data = run_response.json()
+
+    first_task_id = (
+        run_data["comparisons"][0]["tasks"][0]["task_id"]
+    )
+    first_task = await db_session.get(
+        TaskRecord,
+        first_task_id,
+    )
+
+    assert first_task is not None
+    first_task.status = "SUCCESS"
+    first_task.result = "测试回答"
+    await db_session.commit()
+
+    response = await client.get("/evaluation-runs")
+
+    assert response.status_code == 200
+    data = response.json()
+    item = data["items"][0]
+
+    assert data["total"] == 1
+    assert item["dataset_name"] == "overview_dataset"
+    assert item["evaluator_name"] == "llm_judge"
+    assert item["evaluator_version"] == "1.0"
+    assert item["max_concurrency"] == 3
+    assert item["status"] == "PROCESSING"
+    assert item["total_tasks"] == 2
+    assert item["successful_tasks"] == 1
+    assert item["pending_tasks"] == 1
+    assert item["models"] == [
+        "qwen3.7-flash",
+        "glm-5.2",
+    ]
 
 
 async def test_run_evaluation_run_returns_404_when_not_found(

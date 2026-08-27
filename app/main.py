@@ -10,8 +10,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select, update
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.models import ComparisonCreate, ComparisonResponse, TaskCreate, TaskListResponse, TaskResponse, TaskStatus, EvaluationDatasetCreate, EvaluationDatasetResponse, EvaluationCaseCreate, EvaluationCaseResponse, EvaluationDatasetDetailResponse, EvaluationRunComparisonResponse, EvaluationRunCreate, EvaluationRunResponse, EvaluationResultResponse,EvaluationRunEvaluateResponse, SkippedEvaluationTaskResponse, EvaluationRunEvaluateRequest, EvaluatorType, EvaluationRunReportResponse
+from app.models import (
+    ComparisonCreate,
+    ComparisonResponse,
+    EvaluationCaseCreate,
+    EvaluationCaseResponse,
+    EvaluationDatasetCreate,
+    EvaluationDatasetDetailResponse,
+    EvaluationDatasetListResponse,
+    EvaluationDatasetResponse,
+    EvaluationDatasetSummaryResponse,
+    EvaluationResultResponse,
+    EvaluationRunComparisonResponse,
+    EvaluationRunCreate,
+    EvaluationRunEvaluateRequest,
+    EvaluationRunEvaluateResponse,
+    EvaluationRunListResponse,
+    EvaluationRunReportResponse,
+    EvaluationRunResponse,
+    EvaluationRunStatus,
+    EvaluationRunSummaryResponse,
+    EvaluatorType,
+    SkippedEvaluationTaskResponse,
+    TaskCreate,
+    TaskListResponse,
+    TaskResponse,
+    TaskStatus,
+)
 from app.processor import process_prompt
 from app.logger import get_logger   
 from app.database import AsyncSessionFactory, engine, get_session, init_database
@@ -106,7 +133,43 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+def _derive_run_status(
+    *,
+    total_tasks: int,
+    pending_tasks: int,
+    processing_tasks: int,
+    successful_tasks: int,
+    failed_tasks: int,
+) -> EvaluationRunStatus:
+    """根据 Task 状态推导面向界面的 Run 状态。"""
+
+    if total_tasks == 0 or pending_tasks == total_tasks:
+        return EvaluationRunStatus.PENDING
+
+    if pending_tasks or processing_tasks:
+        return EvaluationRunStatus.PROCESSING
+
+    if successful_tasks == total_tasks:
+        return EvaluationRunStatus.COMPLETED
+
+    if failed_tasks == total_tasks:
+        return EvaluationRunStatus.FAILED
+
+    return EvaluationRunStatus.PARTIAL_FAILED
 
 async def execute_task(task_id: str) -> None:
     """在独立数据库会话中执行任务并更新状态。"""
@@ -249,6 +312,48 @@ async def execute_evaluation_run_tasks(
 async def health_check() -> dict[str, str]:
     """检查服务是否正常运行。"""
     return {"status": "ok"}
+
+
+@app.get(
+    "/datasets",
+    response_model=EvaluationDatasetListResponse,
+)
+async def list_datasets(
+    session: SessionDep,
+) -> EvaluationDatasetListResponse:
+    """列出数据集及其样本数量，供概览与创建流程使用。"""
+
+    statement = (
+        select(
+            EvaluationDatasetRecord,
+            func.count(EvaluationCaseRecord.id),
+        )
+        .outerjoin(
+            EvaluationCaseRecord,
+            EvaluationCaseRecord.dataset_id
+            == EvaluationDatasetRecord.id,
+        )
+        .group_by(EvaluationDatasetRecord.id)
+        .order_by(
+            EvaluationDatasetRecord.created_at.desc()
+        )
+    )
+
+    rows = (await session.execute(statement)).all()
+
+    return EvaluationDatasetListResponse(
+        items=[
+            EvaluationDatasetSummaryResponse(
+                dataset_id=dataset.id,
+                name=dataset.name,
+                description=dataset.description,
+                created_at=dataset.created_at,
+                total_cases=case_count,
+            )
+            for dataset, case_count in rows
+        ],
+        total=len(rows),
+    )
 
 
 @app.post(
@@ -397,6 +502,144 @@ async def get_dataset(
     )
 
 
+@app.get(
+    "/evaluation-runs",
+    response_model=EvaluationRunListResponse,
+)
+async def list_evaluation_runs(
+    session: SessionDep,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> EvaluationRunListResponse:
+    """列出最近的评测运行及其执行进度。"""
+
+    total = await session.scalar(
+        select(func.count(EvaluationRunRecord.id))
+    )
+
+    run_rows = (
+        await session.execute(
+            select(
+                EvaluationRunRecord,
+                EvaluationDatasetRecord.name,
+            )
+            .join(
+                EvaluationDatasetRecord,
+                EvaluationDatasetRecord.id
+                == EvaluationRunRecord.dataset_id,
+            )
+            .order_by(
+                EvaluationRunRecord.created_at.desc()
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
+
+    run_ids = [
+        evaluation_run.id
+        for evaluation_run, _ in run_rows
+    ]
+
+    task_rows = []
+
+    if run_ids:
+        task_rows = (
+            await session.execute(
+                select(
+                    TaskRecord,
+                    ComparisonRecord.evaluation_run_id,
+                )
+                .join(
+                    ComparisonRecord,
+                    ComparisonRecord.id
+                    == TaskRecord.comparison_id,
+                )
+                .where(
+                    ComparisonRecord.evaluation_run_id.in_(
+                        run_ids
+                    )
+                )
+                .order_by(TaskRecord.created_at.asc())
+            )
+        ).all()
+
+    progress_by_run = {
+        run_id: {
+            "pending": 0,
+            "processing": 0,
+            "successful": 0,
+            "failed": 0,
+            "models": [],
+        }
+        for run_id in run_ids
+    }
+
+    for task, run_id in task_rows:
+        progress = progress_by_run[run_id]
+
+        if task.status == TaskStatus.PENDING.value:
+            progress["pending"] += 1
+        elif task.status == TaskStatus.PROCESSING.value:
+            progress["processing"] += 1
+        elif task.status == TaskStatus.SUCCESS.value:
+            progress["successful"] += 1
+        elif task.status == TaskStatus.FAILED.value:
+            progress["failed"] += 1
+
+        requested_model = task.requested_model or "unknown"
+
+        if requested_model not in progress["models"]:
+            progress["models"].append(requested_model)
+
+    items = []
+
+    for evaluation_run, dataset_name in run_rows:
+        progress = progress_by_run[evaluation_run.id]
+        total_tasks = (
+            progress["pending"]
+            + progress["processing"]
+            + progress["successful"]
+            + progress["failed"]
+        )
+
+        items.append(
+            EvaluationRunSummaryResponse(
+                evaluation_run_id=evaluation_run.id,
+                dataset_id=evaluation_run.dataset_id,
+                dataset_name=dataset_name,
+                evaluator_name=evaluation_run.evaluator_name,
+                evaluator_version=evaluation_run.evaluator_version,
+                max_concurrency=(
+                    evaluation_run.max_concurrency
+                ),
+                created_at=evaluation_run.created_at,
+                models=progress["models"],
+                status=_derive_run_status(
+                    total_tasks=total_tasks,
+                    pending_tasks=progress["pending"],
+                    processing_tasks=(
+                        progress["processing"]
+                    ),
+                    successful_tasks=(
+                        progress["successful"]
+                    ),
+                    failed_tasks=progress["failed"],
+                ),
+                total_tasks=total_tasks,
+                pending_tasks=progress["pending"],
+                processing_tasks=progress["processing"],
+                successful_tasks=progress["successful"],
+                failed_tasks=progress["failed"],
+            )
+        )
+
+    return EvaluationRunListResponse(
+        items=items,
+        total=total or 0,
+    )
+
+
 @app.post(
     "/evaluation-runs",
     response_model=EvaluationRunResponse,
@@ -438,9 +681,16 @@ async def create_evaluation_run(
             detail="Dataset has no cases",
         )
 
-    # 3. 创建 EvaluationRun
+    selected_evaluator = create_evaluator(
+        payload.evaluator
+    )
+
+    # 3. 创建 EvaluationRun，并固化实验配置
     evaluation_run = EvaluationRunRecord(
         dataset_id=payload.dataset_id,
+        evaluator_name=selected_evaluator.name,
+        evaluator_version=selected_evaluator.version,
+        max_concurrency=payload.max_concurrency,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -505,6 +755,10 @@ async def create_evaluation_run(
     return EvaluationRunResponse(
         evaluation_run_id=evaluation_run.id,
         dataset_id=evaluation_run.dataset_id,
+        evaluator_name=evaluation_run.evaluator_name,
+        evaluator_version=evaluation_run.evaluator_version,
+        max_concurrency=evaluation_run.max_concurrency,
+        created_at=evaluation_run.created_at,
         total_cases=len(cases),
         total_comparisons=len(comparison_records),
         total_tasks=total_tasks,
@@ -589,6 +843,10 @@ async def get_evaluation_run(
     return EvaluationRunResponse(
         evaluation_run_id=evaluation_run.id,
         dataset_id=evaluation_run.dataset_id,
+        evaluator_name=evaluation_run.evaluator_name,
+        evaluator_version=evaluation_run.evaluator_version,
+        max_concurrency=evaluation_run.max_concurrency,
+        created_at=evaluation_run.created_at,
         total_cases=len(comparisons),
         total_comparisons=len(comparisons),
         total_tasks=total_tasks,
@@ -690,6 +948,7 @@ async def run_evaluation_run(
     background_tasks.add_task(
         execute_evaluation_run_tasks,
         task_ids,
+        evaluation_run.max_concurrency,
     )
 
     # 将 Task 按 Comparison 分组，方便构造响应
@@ -728,6 +987,10 @@ async def run_evaluation_run(
     return EvaluationRunResponse(
         evaluation_run_id=evaluation_run.id,
         dataset_id=evaluation_run.dataset_id,
+        evaluator_name=evaluation_run.evaluator_name,
+        evaluator_version=evaluation_run.evaluator_version,
+        max_concurrency=evaluation_run.max_concurrency,
+        created_at=evaluation_run.created_at,
         total_cases=len(comparisons),
         total_comparisons=len(comparisons),
         total_tasks=len(tasks),
@@ -760,7 +1023,9 @@ async def evaluate_evaluation_run_endpoint(
     evaluator_type = (
         payload.evaluator
         if payload is not None
-        else EvaluatorType.KEYWORD_MATCH
+        else EvaluatorType(
+            evaluation_run.evaluator_name
+        )
     )
 
     evaluator = create_evaluator(evaluator_type)
@@ -803,8 +1068,8 @@ async def evaluate_evaluation_run_endpoint(
 async def get_evaluation_run_report(
     evaluation_run_id: int,
     session: SessionDep,
-    evaluator: EvaluatorType = Query(
-        default=EvaluatorType.LLM_JUDGE,
+    evaluator: EvaluatorType | None = Query(
+        default=None,
     ),
     evaluator_version: str | None = Query(
         default=None,
@@ -825,7 +1090,17 @@ async def get_evaluation_run_report(
             detail="Evaluation run not found",
         )
 
-    current_evaluator = create_evaluator(evaluator)
+    evaluator_type = (
+        evaluator
+        if evaluator is not None
+        else EvaluatorType(
+            evaluation_run.evaluator_name
+        )
+    )
+
+    current_evaluator = create_evaluator(
+        evaluator_type
+    )
 
     selected_version = (
         evaluator_version
@@ -837,7 +1112,7 @@ async def get_evaluation_run_report(
             session,
             evaluation_run_id=evaluation_run_id,
             dataset_id=evaluation_run.dataset_id,
-            evaluator_name=evaluator.value,
+            evaluator_name=evaluator_type.value,
             evaluator_version=selected_version,
         )
     except EvaluationReportNotReadyError as exc:

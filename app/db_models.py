@@ -252,7 +252,25 @@ class EvaluationRunRecord(Base):
         index=True,
     )
 
+    evaluator_name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="keyword_match",
+    )
+
+    evaluator_version: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="1.0",
+    )
+
+    max_concurrency: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=2,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-    )   
+    )

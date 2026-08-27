@@ -33,6 +33,16 @@ class BadCaseType(StrEnum):
     EXECUTION_FAILED = "EXECUTION_FAILED"
     QUALITY_FAILED = "QUALITY_FAILED"
 
+
+class EvaluationRunStatus(StrEnum):
+    """面向产品界面的 EvaluationRun 汇总状态。"""
+
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    PARTIAL_FAILED = "PARTIAL_FAILED"
+    FAILED = "FAILED"
+
 class TaskCreate(BaseModel):
     prompt: str = Field(
         min_length=1,
@@ -202,12 +212,33 @@ class EvaluationDatasetDetailResponse(EvaluationDatasetResponse):
     cases: list[EvaluationCaseResponse]
 
 
+class EvaluationDatasetSummaryResponse(EvaluationDatasetResponse):
+    """用于数据集选择器与概览页的轻量摘要。"""
+
+    total_cases: int = Field(ge=0)
+
+
+class EvaluationDatasetListResponse(BaseModel):
+    """评测数据集列表响应。"""
+
+    items: list[EvaluationDatasetSummaryResponse]
+    total: int = Field(ge=0)
+
+
 class EvaluationRunCreate(BaseModel):
     """创建一次批量模型评测。"""
 
     dataset_id: int = Field(gt=0)
 
     models: list[SupportedModel] = Field(min_length=2, max_length=5)
+
+    evaluator: EvaluatorType = EvaluatorType.KEYWORD_MATCH
+
+    max_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+    )
 
     @field_validator("models")
     @classmethod
@@ -231,11 +262,42 @@ class EvaluationRunResponse(BaseModel):
 
     evaluation_run_id: int
     dataset_id: int
+    evaluator_name: str
+    evaluator_version: str
+    max_concurrency: int = Field(ge=1, le=10)
+    created_at: datetime
     total_cases: int = Field(ge=0)
     total_comparisons: int = Field(ge=0)
     total_tasks: int = Field(ge=0)
 
     comparisons: list[EvaluationRunComparisonResponse]
+
+
+class EvaluationRunSummaryResponse(BaseModel):
+    """概览页使用的一次评测运行摘要。"""
+
+    evaluation_run_id: int
+    dataset_id: int
+    dataset_name: str
+    evaluator_name: str
+    evaluator_version: str
+    max_concurrency: int = Field(ge=1, le=10)
+    created_at: datetime
+    models: list[str]
+
+    status: EvaluationRunStatus
+    total_tasks: int = Field(ge=0)
+    pending_tasks: int = Field(ge=0)
+    processing_tasks: int = Field(ge=0)
+    successful_tasks: int = Field(ge=0)
+    failed_tasks: int = Field(ge=0)
+
+
+class EvaluationRunListResponse(BaseModel):
+    """评测运行列表响应。"""
+
+    items: list[EvaluationRunSummaryResponse]
+    total: int = Field(ge=0)
 
 
 class EvaluationRunEvaluateRequest(BaseModel):
@@ -312,6 +374,10 @@ class EvaluationReportMetricsResponse(BaseModel):
     )
 
     total_tokens: int = Field(ge=0)
+    total_input_tokens: int = Field(ge=0)
+    total_output_tokens: int = Field(ge=0)
+    total_reasoning_tokens: int = Field(ge=0)
+    total_cached_tokens: int = Field(ge=0)
 
     average_total_tokens: float | None = Field(
         default=None,
@@ -369,6 +435,42 @@ class EvaluationReportUnassessedCaseResponse(BaseModel):
     reason: str
 
 
+class EvaluationReportTaskResponse(BaseModel):
+    """报告中一条模型回答及其质量评估。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    requested_model: str
+    status: TaskStatus
+    model_answer: str | None
+    task_error: str | None
+
+    llm_duration_ms: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    reasoning_tokens: int | None
+    cached_tokens: int | None
+    total_tokens: int | None
+
+    score: float | None = Field(default=None, ge=0, le=1)
+    passed: bool | None
+    evaluation_reason: str | None
+
+
+class EvaluationReportSampleResponse(BaseModel):
+    """同一个 EvaluationCase 下的多模型回答对比。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    evaluation_case_id: int | None
+    comparison_id: int
+    prompt: str
+    reference_answer: str | None
+    expected_keywords: list[str]
+    tasks: list[EvaluationReportTaskResponse]
+
+
 class EvaluationRunReportResponse(BaseModel):
     """一次 EvaluationRun 的质量与效率报告。"""
 
@@ -387,3 +489,4 @@ class EvaluationRunReportResponse(BaseModel):
     unassessed_cases: list[
         EvaluationReportUnassessedCaseResponse
     ]
+    samples: list[EvaluationReportSampleResponse]

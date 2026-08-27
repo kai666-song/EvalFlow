@@ -224,3 +224,42 @@ async def test_get_dataset_returns_404_when_not_found(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Dataset not found"
+
+
+async def test_list_datasets_returns_case_counts(
+    client: AsyncClient,
+) -> None:
+    first_response = await client.post(
+        "/datasets",
+        json={"name": "first_dataset"},
+    )
+    second_response = await client.post(
+        "/datasets",
+        json={"name": "second_dataset"},
+    )
+
+    first_id = first_response.json()["dataset_id"]
+    second_id = second_response.json()["dataset_id"]
+
+    await client.post(
+        f"/datasets/{first_id}/cases",
+        json={"prompt": "问题一"},
+    )
+    await client.post(
+        f"/datasets/{first_id}/cases",
+        json={"prompt": "问题二"},
+    )
+
+    response = await client.get("/datasets")
+
+    assert response.status_code == 200
+
+    data = response.json()
+    items = {
+        item["dataset_id"]: item
+        for item in data["items"]
+    }
+
+    assert data["total"] == 2
+    assert items[first_id]["total_cases"] == 2
+    assert items[second_id]["total_cases"] == 0

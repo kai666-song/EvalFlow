@@ -34,6 +34,10 @@ class ReportMetrics:
 
     average_latency_ms: float | None
     total_tokens: int
+    total_input_tokens: int
+    total_output_tokens: int
+    total_reasoning_tokens: int
+    total_cached_tokens: int
     average_total_tokens: float | None
 
 
@@ -74,6 +78,38 @@ class ReportUnassessedCase:
 
 
 @dataclass(frozen=True)
+class ReportSampleTask:
+    task_id: str
+    requested_model: str
+    status: TaskStatus
+    model_answer: str | None
+    task_error: str | None
+
+    llm_duration_ms: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    reasoning_tokens: int | None
+    cached_tokens: int | None
+    total_tokens: int | None
+
+    score: float | None
+    passed: bool | None
+    evaluation_reason: str | None
+
+
+@dataclass
+class ReportSample:
+    evaluation_case_id: int | None
+    comparison_id: int
+    prompt: str
+    reference_answer: str | None
+    expected_keywords: list[str]
+    tasks: list[ReportSampleTask] = field(
+        default_factory=list
+    )
+
+
+@dataclass(frozen=True)
 class EvaluationRunReport:
     evaluation_run_id: int
     dataset_id: int
@@ -86,6 +122,7 @@ class EvaluationRunReport:
 
     bad_cases: list[ReportBadCase]
     unassessed_cases: list[ReportUnassessedCase]
+    samples: list[ReportSample]
 
 
 @dataclass
@@ -100,6 +137,10 @@ class _MetricsAccumulator:
     scores: list[float] = field(default_factory=list)
     latencies_ms: list[float] = field(default_factory=list)
     token_totals: list[int] = field(default_factory=list)
+    input_token_totals: list[int] = field(default_factory=list)
+    output_token_totals: list[int] = field(default_factory=list)
+    reasoning_token_totals: list[int] = field(default_factory=list)
+    cached_token_totals: list[int] = field(default_factory=list)
 
     def observe(
         self,
@@ -125,6 +166,26 @@ class _MetricsAccumulator:
         if task.total_tokens is not None:
             self.token_totals.append(
                 task.total_tokens
+            )
+
+        if task.input_tokens is not None:
+            self.input_token_totals.append(
+                task.input_tokens
+            )
+
+        if task.output_tokens is not None:
+            self.output_token_totals.append(
+                task.output_tokens
+            )
+
+        if task.reasoning_tokens is not None:
+            self.reasoning_token_totals.append(
+                task.reasoning_tokens
+            )
+
+        if task.cached_tokens is not None:
+            self.cached_token_totals.append(
+                task.cached_tokens
             )
 
         if evaluation_result is None:
@@ -175,6 +236,18 @@ class _MetricsAccumulator:
                 self.latencies_ms
             ),
             total_tokens=sum(self.token_totals),
+            total_input_tokens=sum(
+                self.input_token_totals
+            ),
+            total_output_tokens=sum(
+                self.output_token_totals
+            ),
+            total_reasoning_tokens=sum(
+                self.reasoning_token_totals
+            ),
+            total_cached_tokens=sum(
+                self.cached_token_totals
+            ),
             average_total_tokens=_average(
                 self.token_totals
             ),
@@ -271,6 +344,7 @@ async def build_evaluation_run_report(
     unassessed_cases: list[
         ReportUnassessedCase
     ] = []
+    samples_by_comparison: dict[int, ReportSample] = {}
 
     for (
         comparison,
@@ -315,6 +389,55 @@ async def build_evaluation_run_report(
             evaluation_case.id
             if evaluation_case is not None
             else None
+        )
+
+        sample = samples_by_comparison.setdefault(
+            comparison.id,
+            ReportSample(
+                evaluation_case_id=evaluation_case_id,
+                comparison_id=comparison.id,
+                prompt=prompt,
+                reference_answer=reference_answer,
+                expected_keywords=(
+                    list(
+                        evaluation_case.expected_keywords
+                        or []
+                    )
+                    if evaluation_case is not None
+                    else []
+                ),
+            ),
+        )
+
+        sample.tasks.append(
+            ReportSampleTask(
+                task_id=task.task_id,
+                requested_model=requested_model,
+                status=TaskStatus(task.status),
+                model_answer=task.result,
+                task_error=task.error,
+                llm_duration_ms=task.llm_duration_ms,
+                input_tokens=task.input_tokens,
+                output_tokens=task.output_tokens,
+                reasoning_tokens=task.reasoning_tokens,
+                cached_tokens=task.cached_tokens,
+                total_tokens=task.total_tokens,
+                score=(
+                    evaluation_result.score
+                    if evaluation_result is not None
+                    else None
+                ),
+                passed=(
+                    evaluation_result.passed
+                    if evaluation_result is not None
+                    else None
+                ),
+                evaluation_reason=(
+                    evaluation_result.reason
+                    if evaluation_result is not None
+                    else None
+                ),
+            )
         )
 
         if task.status == TaskStatus.FAILED.value:
@@ -408,4 +531,5 @@ async def build_evaluation_run_report(
         models=model_metrics,
         bad_cases=bad_cases,
         unassessed_cases=unassessed_cases,
+        samples=list(samples_by_comparison.values()),
     )

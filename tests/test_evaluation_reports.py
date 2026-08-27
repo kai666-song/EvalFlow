@@ -92,16 +92,28 @@ async def _create_report_run(
     qwen_case_1.status = TaskStatus.SUCCESS.value
     qwen_case_1.result = "Qwen 的高质量回答"
     qwen_case_1.llm_duration_ms = 100.0
+    qwen_case_1.input_tokens = 4
+    qwen_case_1.output_tokens = 6
+    qwen_case_1.reasoning_tokens = 2
+    qwen_case_1.cached_tokens = 1
     qwen_case_1.total_tokens = 10
 
     glm_case_1.status = TaskStatus.SUCCESS.value
     glm_case_1.result = "GLM 的低质量回答"
     glm_case_1.llm_duration_ms = 300.0
+    glm_case_1.input_tokens = 10
+    glm_case_1.output_tokens = 20
+    glm_case_1.reasoning_tokens = 5
+    glm_case_1.cached_tokens = 0
     glm_case_1.total_tokens = 30
 
     qwen_case_2.status = TaskStatus.SUCCESS.value
     qwen_case_2.result = "尚未执行目标 Evaluator"
     qwen_case_2.llm_duration_ms = 200.0
+    qwen_case_2.input_tokens = 8
+    qwen_case_2.output_tokens = 12
+    qwen_case_2.reasoning_tokens = 4
+    qwen_case_2.cached_tokens = 2
     qwen_case_2.total_tokens = 20
 
     glm_case_2.status = TaskStatus.FAILED.value
@@ -209,6 +221,10 @@ async def test_report_aggregates_models_and_bad_cases(
     assert overall["pass_rate"] == 0.5
     assert overall["average_latency_ms"] == 200.0
     assert overall["total_tokens"] == 60
+    assert overall["total_input_tokens"] == 22
+    assert overall["total_output_tokens"] == 38
+    assert overall["total_reasoning_tokens"] == 11
+    assert overall["total_cached_tokens"] == 3
     assert overall["average_total_tokens"] == 20.0
 
     models = {
@@ -228,6 +244,8 @@ async def test_report_aggregates_models_and_bad_cases(
     assert qwen["pass_rate"] == 1.0
     assert qwen["average_latency_ms"] == 150.0
     assert qwen["total_tokens"] == 30
+    assert qwen["total_input_tokens"] == 12
+    assert qwen["total_output_tokens"] == 18
 
     glm = models["glm-5.2"]
 
@@ -288,6 +306,29 @@ async def test_report_aggregates_models_and_bad_cases(
     assert (
         data["unassessed_cases"][0]["task_id"]
         == task_ids["case_2_qwen3.7-flash"]
+    )
+
+    assert len(data["samples"]) == 2
+
+    first_sample = data["samples"][0]
+
+    assert first_sample["prompt"] == "测试问题 1"
+    assert first_sample["reference_answer"] == (
+        "测试问题 1 的参考答案"
+    )
+    assert first_sample["expected_keywords"] == ["测试"]
+    assert len(first_sample["tasks"]) == 2
+
+    first_sample_tasks = {
+        task["requested_model"]: task
+        for task in first_sample["tasks"]
+    }
+
+    assert first_sample_tasks["qwen3.7-flash"]["score"] == 0.9
+    assert first_sample_tasks["qwen3.7-flash"]["passed"] is True
+    assert (
+        first_sample_tasks["glm-5.2"]["evaluation_reason"]
+        == "遗漏关键步骤"
     )
 
 
